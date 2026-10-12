@@ -1,0 +1,21 @@
+# Face Recognition Pipeline - Dependencies
+# Most packages are already installed on the system.
+
+# Core ML runtimes
+tensorflow>=2.13.0          # For TFLite interpreter (BlazeFace)
+onnxruntime>=1.15.0         # For embedding model inference
+
+# Computer vision
+opencv-python>=4.8.0        # Camera capture and image processing
+Pillow>=10.0.0              # Image loading
+
+# Numerical / scientific
+numpy>=1.24.0
+scipy>=1.11.0
+scikit-learn>=1.3.0         # Cosine similarity utilities
+
+# Web application
+Flask>=3.0.0
+
+# Utilities (standard library)
+# threading, queue, json, os, time — no install needed

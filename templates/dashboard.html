@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Real-time face recognition dashboard with pose-aware enrollment and multi-camera monitoring">
+    <title>Real-Time Face Recognition Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- ─── Header ─────────────────────────────────────────────────── -->
+    <header class="header" id="main-header">
+        <div class="header-left">
+            <div class="logo">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M9 3H5a2 2 0 0 0-2 2v4"/>
+                    <path d="M15 3h4a2 2 0 0 1 2 2v4"/>
+                    <path d="M9 21H5a2 2 0 0 1-2-2v-4"/>
+                    <path d="M15 21h4a2 2 0 0 0 2-2v-4"/>
+                    <circle cx="12" cy="10" r="3"/>
+                    <path d="M7 16.5c0-2 2.2-3.5 5-3.5s5 1.5 5 3.5"/>
+                </svg>
+            </div>
+            <div>
+                <h1>Face Recognition System</h1>
+                <p class="header-subtitle">Real-Time Multi-Camera &bull; Pose-Aware Enrollment</p>
+            </div>
+        </div>
+        <div class="header-right">
+            <!-- Model Switcher Selector -->
+            <div class="model-selector-wrapper">
+                <label for="model-select" class="selector-label">Model:</label>
+                <select id="model-select" class="select-dropdown" onchange="switchModel(this.value)">
+                    <option value="glintr100" {% if gallery_info.active_model == 'glintr100' %}selected{% endif %}>GlintR100 (ResNet100)</option>
+                    <option value="adaface" {% if gallery_info.active_model == 'adaface' %}selected{% endif %}>AdaFace IR-101 (WebFace12M)</option>
+                </select>
+            </div>
+            <div class="status-pill" id="engine-status">
+                <span class="status-dot active"></span>
+                <span class="status-text" id="status-model-name">{{ gallery_info.active_model|upper }} Active</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ─── Main Content ───────────────────────────────────────────── -->
+    <main class="main-content" id="main-content">
+
+        <!-- ─── Section 16 Confidence Legend ───────────────────────── -->
+        <div class="confidence-legend" id="confidence-legend">
+            <div class="legend-title">Confidence Display Rules (Section 16):</div>
+            <div class="legend-items">
+                <div class="legend-item">
+                    <span class="legend-badge badge-green">&ge; 90%</span>
+                    <span class="legend-text">High Confidence: Green label (Name + %)</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-badge badge-yellow">60% - 89%</span>
+                    <span class="legend-text">Medium Confidence: Yellow label (Name + %)</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-badge badge-red">&lt; 60%</span>
+                    <span class="legend-text">Unknown / Uncertain: No Name displayed</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── Info Cards ─────────────────────────────────────────── -->
+        <section class="info-cards" id="info-cards">
+            <div class="info-card" id="card-cameras">
+                <div class="info-card-icon">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                    </svg>
+                </div>
+                <div class="info-card-data">
+                    <span class="info-card-value" id="active-cameras">{{ camera_ids|length }}</span>
+                    <span class="info-card-label">Configured Cameras</span>
+                </div>
+            </div>
+            <div class="info-card" id="card-identities">
+                <div class="info-card-icon">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                </div>
+                <div class="info-card-data">
+                    <span class="info-card-value" id="enrolled-count">{{ gallery_info.enrolled_names|length }}</span>
+                    <span class="info-card-label">Identities ({{ gallery_info.total_embeddings }} refs)</span>
+                </div>
+            </div>
+            <div class="info-card" id="card-latency">
+                <div class="info-card-icon">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                </div>
+                <div class="info-card-data">
+                    <span class="info-card-value" id="avg-latency">--</span>
+                    <span class="info-card-label">Avg Pipeline (ms)</span>
+                </div>
+            </div>
+            <div class="info-card" id="card-fps">
+                <div class="info-card-icon">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                    </svg>
+                </div>
+                <div class="info-card-data">
+                    <span class="info-card-value" id="frames-processed">0</span>
+                    <span class="info-card-label">Processed (1-in-5)</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── Camera Feeds ───────────────────────────────────────── -->
+        <section class="camera-grid" id="camera-grid">
+            {% for cam_id in camera_ids %}
+            <div class="camera-card" id="camera-card-{{ cam_id }}" data-camera-id="{{ cam_id }}">
+                <div class="camera-card-header">
+                    <div class="camera-card-title">
+                        <span class="camera-dot" id="camera-dot-{{ cam_id }}"></span>
+                        <h2>Camera {{ cam_id }} (/dev/video{{ cam_id }})</h2>
+                    </div>
+                    <div class="camera-controls">
+                        <button class="btn btn-sm btn-start" id="btn-start-{{ cam_id }}"
+                                onclick="controlCamera({{ cam_id }}, 'start')" title="Start Camera">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        </button>
+                        <button class="btn btn-sm btn-stop" id="btn-stop-{{ cam_id }}"
+                                onclick="controlCamera({{ cam_id }}, 'stop')" title="Stop Camera">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="camera-feed-container">
+                    <img class="camera-feed" id="feed-{{ cam_id }}"
+                         src="/video_feed/{{ cam_id }}"
+                         alt="Camera {{ cam_id }} Feed"
+                         onerror="handleFeedError(this, {{ cam_id }})"
+                         onload="handleFeedLoad(this, {{ cam_id }})">
+                    <div class="camera-overlay disconnected" id="overlay-{{ cam_id }}">
+                        <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M16.5 9.4l-9-5.19M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
+                            <line x1="1" y1="1" x2="23" y2="23" stroke-width="2"/>
+                        </svg>
+                        <p>Camera Standby / Disconnected</p>
+                        <span class="camera-error-msg" id="error-msg-{{ cam_id }}"></span>
+                    </div>
+                </div>
+                <div class="camera-card-footer">
+                    <div class="camera-stat">
+                        <span class="stat-label">Status</span>
+                        <span class="stat-value" id="status-{{ cam_id }}">Connecting...</span>
+                    </div>
+                    <div class="camera-stat">
+                        <span class="stat-label">Detection</span>
+                        <span class="stat-value" id="det-time-{{ cam_id }}">-- ms</span>
+                    </div>
+                    <div class="camera-stat">
+                        <span class="stat-label">Embedding</span>
+                        <span class="stat-value" id="emb-time-{{ cam_id }}">-- ms</span>
+                    </div>
+                    <div class="camera-stat">
+                        <span class="stat-label">Faces</span>
+                        <span class="stat-value" id="face-count-{{ cam_id }}">0</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </section>
+
+        <!-- ─── Pose-Aware Video Enrollment Section ────────────────── -->
+        <section class="enrollment-section" id="enrollment-section">
+            <div class="panel-header">
+                <h2>
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                    </svg>
+                    Pose-Aware 5-Angle Video Enrollment
+                </h2>
+                <div class="pose-badges-header">
+                    <span class="pose-badge">1. Front</span>
+                    <span class="pose-badge">2. Left</span>
+                    <span class="pose-badge">3. Right</span>
+                    <span class="pose-badge">4. Up</span>
+                    <span class="pose-badge">5. Down</span>
+                </div>
+            </div>
+            <div class="enrollment-form-container">
+                <form id="video-enroll-form" onsubmit="handleVideoEnroll(event)">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="enroll-name">Person Display Name:</label>
+                            <input type="text" id="enroll-name" class="input-text" placeholder="e.g. Anoop Verma" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="enroll-video">Video File (MP4, AVI, WebM):</label>
+                            <input type="file" id="enroll-video" class="input-file" accept="video/*" required>
+                        </div>
+                        <div class="form-group btn-group-align">
+                            <button type="submit" class="btn btn-primary" id="btn-submit-enroll">
+                                Enroll Identity
+                            </button>
+                        </div>
+                    </div>
+                </form>
+                <div id="enrollment-result" class="enrollment-result" style="display:none;"></div>
+            </div>
+        </section>
+
+        <!-- ─── Gallery Panel ──────────────────────────────────────── -->
+        <section class="gallery-panel" id="gallery-panel">
+            <div class="panel-header">
+                <h2>
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                        <circle cx="8.5" cy="8.5" r="1.5"/>
+                        <polyline points="21 15 16 10 5 21"/>
+                    </svg>
+                    Enrolled Identities Gallery
+                </h2>
+                <button class="btn btn-secondary" id="btn-re-enroll" onclick="reEnroll()">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="23 4 23 10 17 10"/>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                    </svg>
+                    Reload From Disk
+                </button>
+            </div>
+            <div class="gallery-list" id="gallery-list">
+                {% for name in gallery_info.enrolled_names %}
+                <div class="gallery-item">
+                    <div class="gallery-avatar">{{ name[0] }}</div>
+                    <div class="gallery-info">
+                        <span class="gallery-name">{{ name }}</span>
+                        {% if gallery_info.summary and name in gallery_info.summary %}
+                        <div class="gallery-poses">
+                            {% for pose, count in gallery_info.summary[name].poses.items() %}
+                            <span class="mini-pose-badge">{{ pose }}: {{ count }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+                {% if not gallery_info.enrolled_names %}
+                <div class="gallery-empty">
+                    <p>No identities enrolled.</p>
+                    <p class="text-muted">Use video enrollment or add images to <code>Ppl/Images/</code></p>
+                </div>
+                {% endif %}
+            </div>
+            <div class="gallery-footer">
+                <span class="text-muted">Active Model: <strong id="footer-active-model">{{ gallery_info.active_model|upper }}</strong></span>
+                <span class="text-muted">Decision Boundary: &ge; 60% confidence</span>
+            </div>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>
