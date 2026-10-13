@@ -119,25 +119,49 @@ def run_benchmark():
         model_results["cross_pose_cosine_sim"] = cross_pose_sims
         model_results["cross_pose_confidence"] = cross_pose_confs
 
-        # 5. Impostor separation (Anoop vs others)
+        # 5. Full-gallery Impostor Evaluation (Test un-enrolled / different persons against the gallery)
+        # Evaluate cross-identity impostor pairs between distinct enrolled individuals
         impostor_sims = {}
-        if front_refs:
-            front_emb = front_refs[0]
+        total_impostor_trials = 0
+        false_positive_identifications = 0
+
+        all_names = list(gallery.gallery.keys())
+        for i_idx, name_a in enumerate(all_names):
+            refs_a = gallery.gallery[name_a].get("references", [])
+            if not refs_a:
+                continue
+
+            # Create a gallery excluding Person A to test Person A as an unknown impostor
+            impostor_gallery = FaceGallery(similarity_threshold=config.MIN_RECOGNITION_SIMILARITY)
             for other_name, other_val in gallery.gallery.items():
-                if other_name != "Anoop Verma":
-                    for r in other_val.get("references", []):
-                        sim = float(np.dot(front_emb, r["embedding"]))
-                        impostor_sims[f"Anoop_vs_{other_name}"] = round(sim, 4)
-                        break
+                if other_name != name_a:
+                    impostor_gallery.gallery[other_name] = other_val
+
+            for ref in refs_a:
+                total_impostor_trials += 1
+                matched_name, conf, sim, _ = impostor_gallery.identify(ref["embedding"])
+                if matched_name != "Unknown" and conf >= config.CONFIDENCE_THRESHOLD_YELLOW:
+                    false_positive_identifications += 1
+
+                pair_key = f"{name_a}_vs_others"
+                if pair_key not in impostor_sims or sim > impostor_sims[pair_key]:
+                    impostor_sims[pair_key] = round(float(sim), 4)
 
         model_results["impostor_cosine_sim"] = impostor_sims
         max_impostor_sim = max(impostor_sims.values()) if impostor_sims else 0.0
         model_results["max_impostor_sim"] = max_impostor_sim
-        model_results["false_acceptance_at_threshold_60"] = "0.0% (Zero false accepts)"
 
-        # 6. Evaluation on test images if available
+        if total_impostor_trials > 0:
+            fpir = (false_positive_identifications / total_impostor_trials) * 100.0
+            model_results["false_positive_identification_rate"] = f"{false_positive_identifications}/{total_impostor_trials} ({fpir:.2f}%)"
+            model_results["false_acceptance_at_threshold_60"] = f"{fpir:.2f}% ({false_positive_identifications} false accepts in {total_impostor_trials} trials)"
+        else:
+            model_results["false_positive_identification_rate"] = "NOT EVALUATED (Insufficient multi-identity gallery data)"
+            model_results["false_acceptance_at_threshold_60"] = "NOT EVALUATED (Insufficient multi-identity gallery data)"
+
+        # 6. Evaluation on held-out test images if available
         test_matches = []
-        if os.path.exists(config.TEST_IMAGES_DIR):
+        if os.path.exists(config.TEST_IMAGES_DIR) and os.listdir(config.TEST_IMAGES_DIR):
             for t_file in os.listdir(config.TEST_IMAGES_DIR):
                 if t_file.lower().endswith((".jpg", ".jpeg", ".png")):
                     t_img = cv2.imread(os.path.join(config.TEST_IMAGES_DIR, t_file))
@@ -155,7 +179,11 @@ def run_benchmark():
                                 "similarity": round(sim, 4),
                                 "pose": pose
                             })
-        model_results["test_image_results"] = test_matches
+            model_results["test_image_results"] = test_matches
+            model_results["test_images_status"] = f"EVALUATED ({len(test_matches)} faces tested)"
+        else:
+            model_results["test_image_results"] = []
+            model_results["test_images_status"] = "NOT EVALUATED (No labeled test_data directory provided)"
 
         results[model_display_name] = model_results
         print(f"✓ Completed {model_display_name}.\n")
@@ -190,8 +218,9 @@ def run_benchmark():
     print(f"{'Cross-Pose (Front vs Left Sim)':38s} | {str(f_vs_l_1):26s} | {str(f_vs_l_2):26s}")
     print(f"{'Cross-Pose (Front vs Down Sim)':38s} | {str(f_vs_d_1):26s} | {str(f_vs_d_2):26s}")
     print(f"{'Cross-Pose (Front vs Right Sim)':38s} | {str(f_vs_r_1):26s} | {str(f_vs_r_2):26s}")
-    print(f"{'Max Impostor Cosine Sim':38s} | {str(m1['max_impostor_sim']):26s} | {str(m2['max_impostor_sim']):26s}")
-    print(f"{'False Acceptance Rate (FAR)':38s} | {'0.0% (Zero false accepts)':26s} | {'0.0% (Zero false accepts)':26s}")
+    far_1 = m1.get('false_acceptance_at_threshold_60', 'NOT EVALUATED')
+    far_2 = m2.get('false_acceptance_at_threshold_60', 'NOT EVALUATED')
+    print(f"{'False Positive Ident. Rate (FPIR)':38s} | {str(far_1)[:26]:26s} | {str(far_2)[:26]:26s}")
     print(f"{'Multi-Pose Gallery Support':38s} | {'5 Poses (Front/L/R/U/D)':26s} | {'5 Poses (Front/L/R/U/D)':26s}")
     print(f"{'Section 16 Confidence Rules':38s} | {'90% Green / 60% Yellow':26s} | {'90% Green / 60% Yellow':26s}")
     print(f"{'License':38s} | {'Non-Commercial Research':26s} | {'Non-Commercial Academic':26s}")

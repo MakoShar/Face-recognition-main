@@ -33,12 +33,12 @@ class FacePreprocessor:
       - Convert color space as needed
     """
 
-    def __init__(self, target_size=112, margin_ratio=0.2, min_face_size=20):
+    def __init__(self, target_size=112, margin_ratio=0.2, min_face_size=50):
         """
         Args:
             target_size: Output crop size (square) for embedding model
             margin_ratio: Extra margin around face bbox (fraction of face size)
-            min_face_size: Minimum acceptable face dimension in pixels
+            min_face_size: Minimum acceptable face dimension in pixels (default: 50)
         """
         self.target_size = target_size
         self.margin_ratio = margin_ratio
@@ -69,6 +69,17 @@ class FacePreprocessor:
 
         if target_size is None:
             target_size = self.target_size
+
+        # Validate bounding box coordinates and resolution before alignment
+        if bbox is not None:
+            x1, y1, x2, y2 = bbox
+            if not (np.isfinite(x1) and np.isfinite(y1) and np.isfinite(x2) and np.isfinite(y2)):
+                return None
+            face_w = x2 - x1
+            face_h = y2 - y1
+            if face_w < self.min_face_size or face_h < self.min_face_size:
+                logger.debug(f"Face too small for alignment: {face_w:.0f}x{face_h:.0f} < {self.min_face_size}")
+                return None
 
         h, w = frame.shape[:2]
 
@@ -133,7 +144,18 @@ class FacePreprocessor:
                          or None if the crop is invalid
             face_crop: The raw or aligned BGR crop, or None
         """
-        if frame is None or frame.size == 0:
+        if frame is None or frame.size == 0 or bbox is None:
+            return None, None
+
+        # Validate bounding box coordinates and minimum resolution
+        x1, y1, x2, y2 = bbox
+        if not (np.isfinite(x1) and np.isfinite(y1) and np.isfinite(x2) and np.isfinite(y2)):
+            return None, None
+
+        face_w = x2 - x1
+        face_h = y2 - y1
+        if face_w < self.min_face_size or face_h < self.min_face_size:
+            logger.debug(f"Face too small: {face_w:.0f}x{face_h:.0f} < {self.min_face_size}")
             return None, None
 
         if keypoints is not None:
@@ -143,15 +165,6 @@ class FacePreprocessor:
                 return tensor, aligned
 
         h, w = frame.shape[:2]
-        x1, y1, x2, y2 = bbox
-
-        # Validate bounding box
-        face_w = x2 - x1
-        face_h = y2 - y1
-
-        if face_w < self.min_face_size or face_h < self.min_face_size:
-            logger.debug(f"Face too small: {face_w:.0f}x{face_h:.0f}")
-            return None, None
 
         # Add margin around the face
         margin_x = face_w * self.margin_ratio

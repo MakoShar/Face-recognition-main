@@ -98,9 +98,15 @@ COLOR_UNKNOWN = (60, 76, 231)             # Muted red / neutral
 
 # ─── Gallery / Matching Settings ─────────────────────────────────────────────
 SIMILARITY_METRIC = "cosine"              # "cosine"
-SIMILARITY_MATCH_BOUNDARY = 0.35          # Raw cosine similarity corresponding to 60% confidence
+MIN_RECOGNITION_SIMILARITY = 0.50          # Strict minimum cosine similarity threshold to consider identity match
+MIN_RECOGNITION_MARGIN = 0.08              # Minimum margin between best and second-best candidate identities
+SIMILARITY_MATCH_BOUNDARY = 0.50          # Minimum similarity boundary (kept for backward compatibility)
 MAX_REFS_PER_POSE = 3                     # Reference samples per pose category
 MAX_TOTAL_REFS_PER_IDENTITY = 15          # Max reference embeddings per person
+
+# Calibrated Sigmoid Parameters
+CALIBRATION_SIGMOID_CENTER = 0.55         # Similarity center point for sigmoid confidence calibration
+CALIBRATION_SIGMOID_SLOPE = 15.0          # Sigmoid steepness factor
 
 # Pose categories
 POSE_CATEGORIES = ["Front", "Left", "Right", "Up", "Down"]
@@ -117,8 +123,10 @@ CAMERA_MAX_RECONNECT_ATTEMPTS = 10        # Max reconnection attempts
 # ─── Tracker Settings ────────────────────────────────────────────────────────
 TRACKER_ENABLED = True                    # Frame-to-frame tracking
 TRACKER_IOU_THRESHOLD = 0.3              # Min IoU to associate tracked faces
-TRACKER_MAX_DISAPPEARED = 15              # Frames before dropping a tracked face
-TRACKER_RECOGNITION_INTERVAL = 10         # Re-run recognition every N frames
+TRACKER_MAX_DISAPPEARED = 5               # Frames before dropping a tracked face (0.5s at 10 fps)
+TRACKER_RECOGNITION_INTERVAL = 1          # Re-run recognition every frame (2ms on GPU)
+TRACK_CONFIRMATION_MIN_OBSERVATIONS = 3   # Minimum consistent observations required before confirming track identity
+TRACK_MAX_CONTRADICTIONS = 1              # Max allowed contradictory observations before resetting track match
 
 # ─── Attendance & Event Suppression Settings ─────────────────────────────────
 ATTENDANCE_ENABLED = True

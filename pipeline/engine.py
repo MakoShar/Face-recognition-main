@@ -191,25 +191,49 @@ class CameraWorker:
                 faces_to_recognize = []  # (det_idx, track_id, crop, det, blur_score)
 
                 h, w = frame.shape[:2]
+                min_face_size = getattr(config, 'MIN_FACE_SIZE', 50)
+                min_blur_score = getattr(config, 'MIN_BLUR_SCORE', 45.0)
+
                 for det_idx, track_id, needs_recognition in assignments:
                     det = detections[det_idx]
-                    if self.preprocessor is not None:
-                        crop = self.preprocessor.align_face(frame, det.get('keypoints'), det['bbox'])
-                    else:
-                        x1, y1, x2, y2 = [int(v) for v in det['bbox']]
-                        crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+                    bbox = det['bbox']
+                    face_w = bbox[2] - bbox[0]
+                    face_h = bbox[3] - bbox[1]
 
-                    if crop is not None and crop.size > 0:
-                        # Face Quality Check: Laplacian variance for sharpness
-                        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                        blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-                    else:
+                    # Face quality verification: reject tiny, invalid, or truncated bounding boxes
+                    is_valid_bbox = (
+                        face_w >= min_face_size and face_h >= min_face_size and
+                        np.isfinite(bbox[0]) and np.isfinite(bbox[1]) and
+                        np.isfinite(bbox[2]) and np.isfinite(bbox[3])
+                    )
+
+                    if not is_valid_bbox:
+                        crop = None
                         blur_score = 0.0
+                    else:
+                        if self.preprocessor is not None:
+                            crop = self.preprocessor.align_face(frame, det.get('keypoints'), bbox)
+                        else:
+                            x1, y1, x2, y2 = [int(v) for v in bbox]
+                            crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+
+                        if crop is not None and crop.size > 0:
+                            # Face Quality Check: Laplacian variance for sharpness
+                            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                            blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                        else:
+                            blur_score = 0.0
+
+                    # Reject low-quality / blurry faces before embedding (Section 4)
+                    is_quality_pass = (crop is not None and crop.size > 0 and blur_score >= min_blur_score)
 
                     if needs_recognition:
-                        if crop is not None and crop.size > 0:
+                        if is_quality_pass:
                             faces_to_recognize.append((det_idx, track_id, crop, det, blur_score))
                         else:
+                            # Reject crop as Unknown / Uncertain without embedding
+                            if self.tracker is not None:
+                                self.tracker.update_identity(track_id, "Unknown", 0.0, 0.0, "None", quality=blur_score)
                             results.append(RecognitionResult(
                                 bbox=bboxes[det_idx],
                                 name="Unknown",
@@ -256,10 +280,12 @@ class CameraWorker:
                             name, confidence, similarity, match_pose = self.tracker.update_identity(
                                 track_id, raw_name, raw_sim, raw_conf, match_pose, quality=blur_score
                             )
-                            # Evaluate attendance event (duplicate suppressed)
+                            # Evaluate attendance event (isolated per camera & duplicate suppressed)
                             if self.attendance_manager is not None and name != "Unknown":
                                 track = self.tracker.get_track(track_id)
                                 best_obs = track.best_observation if track else None
+                                is_confirmed = getattr(track, 'is_confirmed', True) if track else True
+                                direction = getattr(track, 'direction', "Entry") if track else "Entry"
                                 self.attendance_manager.process_observation(
                                     track_id=track_id,
                                     name=name,
@@ -268,7 +294,9 @@ class CameraWorker:
                                     pose=match_pose,
                                     quality_score=blur_score,
                                     camera_id=self.camera_id,
-                                    best_observation=best_obs
+                                    best_observation=best_obs,
+                                    is_confirmed=is_confirmed,
+                                    direction=direction
                                 )
                         else:
                             name, confidence, similarity = raw_name, raw_conf, raw_sim
@@ -339,7 +367,7 @@ class CameraWorker:
             track_prefix = f"[#{result.track_id}] " if getattr(result, 'track_id', -1) >= 0 else ""
             is_logged = False
             if self.attendance_manager and getattr(result, 'track_id', -1) >= 0:
-                is_logged = self.attendance_manager.is_track_logged(result.track_id)
+                is_logged = self.attendance_manager.is_track_logged(result.track_id, camera_id=self.camera_id)
             att_suffix = " (Logged)" if is_logged else ""
 
             # Section 16 Color & Label Rules

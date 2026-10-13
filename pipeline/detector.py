@@ -5,6 +5,7 @@ Wraps the BlazeFace Full Range Sparse model for multi-face detection.
 Handles anchor generation, output decoding, NMS, and bounding box extraction.
 """
 
+import threading
 import numpy as np
 import cv2
 import logging
@@ -38,6 +39,7 @@ class BlazeFaceDetector:
         self.confidence_threshold = confidence_threshold
         self.nms_iou_threshold = nms_iou_threshold
         self.input_size = 192
+        self._lock = threading.Lock()
 
         # Load TFLite model cleanly (suppressing numpy 1.x vs 2.x stderr warnings)
         try:
@@ -181,20 +183,23 @@ class BlazeFaceDetector:
 
         return input_tensor, scale, pad_x, pad_y, w, h
 
-    def _decode_boxes(self, raw_boxes):
+    def _decode_boxes(self, raw_boxes, anchors=None):
         """
         Decode raw bounding box predictions using anchors.
 
         Args:
-            raw_boxes: (2304, 16) raw regressors
+            raw_boxes: (N, 16) raw regressors
+            anchors: Optional (N, 2) anchor centers. If None, uses self.anchors.
 
         Returns:
-            boxes: (2304, 4) decoded boxes as [x1, y1, x2, y2] normalized
-            keypoints: (2304, 6, 2) decoded keypoint coordinates
+            boxes: (N, 4) decoded boxes as [x1, y1, x2, y2] normalized
+            keypoints: (N, 6, 2) decoded keypoint coordinates
         """
+        use_anchors = self.anchors if anchors is None else anchors
+
         # Extract box center offsets and size
-        cx = raw_boxes[:, 0] / self.input_size + self.anchors[:, 0]
-        cy = raw_boxes[:, 1] / self.input_size + self.anchors[:, 1]
+        cx = raw_boxes[:, 0] / self.input_size + use_anchors[:, 0]
+        cy = raw_boxes[:, 1] / self.input_size + use_anchors[:, 1]
         bw = raw_boxes[:, 2] / self.input_size
         bh = raw_boxes[:, 3] / self.input_size
 
@@ -210,8 +215,8 @@ class BlazeFaceDetector:
         keypoints = np.zeros((len(raw_boxes), 6, 2), dtype=np.float32)
         for k in range(6):
             kp_offset = 4 + k * 2
-            keypoints[:, k, 0] = raw_boxes[:, kp_offset] / self.input_size + self.anchors[:, 0]
-            keypoints[:, k, 1] = raw_boxes[:, kp_offset + 1] / self.input_size + self.anchors[:, 1]
+            keypoints[:, k, 0] = raw_boxes[:, kp_offset] / self.input_size + use_anchors[:, 0]
+            keypoints[:, k, 1] = raw_boxes[:, kp_offset + 1] / self.input_size + use_anchors[:, 1]
 
         return boxes, keypoints
 
@@ -284,13 +289,12 @@ class BlazeFaceDetector:
         # Preprocess
         input_tensor, scale, pad_x, pad_y, orig_w, orig_h = self._preprocess(frame)
 
-        # Run inference
-        self.interpreter.set_tensor(self.input_details[0]['index'], input_tensor)
-        self.interpreter.invoke()
-
-        # Get outputs
-        raw_boxes = self.interpreter.get_tensor(self.output_details[0]['index'])[0]   # (2304, 16)
-        raw_scores = self.interpreter.get_tensor(self.output_details[1]['index'])[0]  # (2304, 1)
+        # Run thread-safe inference
+        with self._lock:
+            self.interpreter.set_tensor(self.input_details[0]['index'], input_tensor)
+            self.interpreter.invoke()
+            raw_boxes = self.interpreter.get_tensor(self.output_details[0]['index'])[0].copy()   # (2304, 16)
+            raw_scores = self.interpreter.get_tensor(self.output_details[1]['index'])[0].copy()  # (2304, 1)
 
         # Apply sigmoid to scores (clipped to avoid numerical overflow)
         raw_scores_clamped = np.clip(raw_scores.squeeze(), -20.0, 20.0)
@@ -304,15 +308,9 @@ class BlazeFaceDetector:
         filtered_boxes_raw = raw_boxes[mask]
         filtered_scores = scores[mask]
 
-        # Decode boxes
-        # We need to use the filtered anchors too
+        # Decode boxes using matched anchors without mutating self.anchors
         filtered_anchors = self.anchors[mask]
-
-        # Temporarily replace anchors for decoding
-        orig_anchors = self.anchors
-        self.anchors = filtered_anchors
-        decoded_boxes, decoded_keypoints = self._decode_boxes(filtered_boxes_raw)
-        self.anchors = orig_anchors
+        decoded_boxes, decoded_keypoints = self._decode_boxes(filtered_boxes_raw, anchors=filtered_anchors)
 
         # NMS
         keep_indices = self._nms(decoded_boxes, filtered_scores)

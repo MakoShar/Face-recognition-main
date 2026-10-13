@@ -1,46 +1,49 @@
 {
   "GlintR100 (ResNet100)": {
     "model_size_mb": 248.59,
-    "load_time_sec": 0.526,
-    "latency_ms_avg": 11.44,
-    "latency_ms_std": 0.42,
-    "throughput_fps": 87.44,
+    "load_time_sec": 0.359,
+    "latency_ms_avg": 11.16,
+    "latency_ms_std": 0.41,
+    "throughput_fps": 89.58,
     "enrolled_identities": 7,
-    "total_reference_samples": 105,
+    "total_reference_samples": 104,
     "active_providers": [
       "CUDAExecutionProvider",
       "CPUExecutionProvider"
     ],
     "cross_pose_cosine_sim": {
-      "Front_vs_Left": 0.123,
-      "Front_vs_Right": 0.3042,
-      "Front_vs_Up": 0.1789,
-      "Front_vs_Down": 0.42
+      "Front_vs_Left": 0.0346,
+      "Front_vs_Right": 0.194,
+      "Front_vs_Up": 0.3142,
+      "Front_vs_Down": 0.6486
     },
     "cross_pose_confidence": {
-      "Front_vs_Left": 24.6,
-      "Front_vs_Right": 53.1,
-      "Front_vs_Up": 34.3,
-      "Front_vs_Down": 74.0
+      "Front_vs_Left": 4.3,
+      "Front_vs_Right": 24.2,
+      "Front_vs_Up": 38.3,
+      "Front_vs_Down": 89.6
     },
     "impostor_cosine_sim": {
-      "Anoop_vs_Devanshu Pal": 0.2447,
-      "Anoop_vs_Nihal": 0.1779,
-      "Anoop_vs_Nirvighna": 0.0742,
-      "Anoop_vs_Swetab Tripathy": 0.2118,
-      "Anoop_vs_Vipul Jat": 0.1511,
-      "Anoop_vs_Yash Jain": 0.1901
+      "Anoop Verma_vs_others": 0.5749,
+      "Devanshu Pal_vs_others": 0.5749,
+      "Nihal_vs_others": 0.5589,
+      "Nirvighna_vs_others": 0.4545,
+      "Swetab Tripathy_vs_others": 0.3905,
+      "Vipul Jat_vs_others": 0.5108,
+      "Yash Jain_vs_others": 0.4409
     },
-    "max_impostor_sim": 0.2447,
-    "false_acceptance_at_threshold_60": "0.0% (Zero false accepts)",
-    "test_image_results": []
+    "max_impostor_sim": 0.5749,
+    "false_positive_identification_rate": "7/104 (6.73%)",
+    "false_acceptance_at_threshold_60": "6.73% (7 false accepts in 104 trials)",
+    "test_image_results": [],
+    "test_images_status": "NOT EVALUATED (No labeled test_data directory provided)"
   },
   "AdaFace (IR-101)": {
     "model_size_mb": 248.61,
-    "load_time_sec": 0.327,
-    "latency_ms_avg": 11.06,
-    "latency_ms_std": 0.12,
-    "throughput_fps": 90.39,
+    "load_time_sec": 0.345,
+    "latency_ms_avg": 10.85,
+    "latency_ms_std": 0.08,
+    "throughput_fps": 92.17,
     "enrolled_identities": 1,
     "total_reference_samples": 15,
     "active_providers": [
@@ -49,9 +52,13 @@
     ],
     "cross_pose_cosine_sim": {},
     "cross_pose_confidence": {},
-    "impostor_cosine_sim": {},
-    "max_impostor_sim": 0.0,
-    "false_acceptance_at_threshold_60": "0.0% (Zero false accepts)",
-    "test_image_results": []
+    "impostor_cosine_sim": {
+      "Nirvighna_vs_others": -1.0
+    },
+    "max_impostor_sim": -1.0,
+    "false_positive_identification_rate": "0/15 (0.00%)",
+    "false_acceptance_at_threshold_60": "0.00% (0 false accepts in 15 trials)",
+    "test_image_results": [],
+    "test_images_status": "NOT EVALUATED (No labeled test_data directory provided)"
   }
 }

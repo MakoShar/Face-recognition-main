@@ -43,9 +43,9 @@ class AttendanceManager:
 
         self._lock = threading.Lock()
         self.events = []
-        self.logged_tracks = set()  # set of track_ids logged in current session
-        self.last_attendance_time = {}  # {person_name: timestamp}
-        self.track_identities_history = {}  # {track_id: {name: count}}
+        self.logged_tracks = set()  # set of (camera_id, track_id) tuples logged in current session
+        self.last_attendance_time = {}  # {(person_name, direction): timestamp}
+        self.track_identities_history = {}  # {(camera_id, track_id): {name: count}}
 
         if self.log_path:
             self._load_from_disk()
@@ -58,9 +58,11 @@ class AttendanceManager:
                             pose="Front",
                             quality_score=100.0,
                             camera_id=0,
-                            best_observation=None):
+                            best_observation=None,
+                            is_confirmed=True,
+                            direction="Entry"):
         """
-        Evaluate an observation for an attendance event.
+        Evaluate an observation for an attendance event with multi-camera isolation.
 
         Args:
             track_id: Integer track ID
@@ -71,33 +73,40 @@ class AttendanceManager:
             quality_score: Sharpness / quality metric
             camera_id: Camera identifier
             best_observation: Dict with best-quality observation details
+            is_confirmed: Boolean whether the track's identity has reached confirmation threshold
+            direction: Direction of crossing ("Entry", "Exit", or "Stationary")
 
         Returns:
             event: Dict if an attendance event was newly registered, None if suppressed.
         """
-        if not name or name == "Unknown" or confidence < self.min_confidence:
+        # Reject unconfirmed, unknown, or uncertain identities
+        if not is_confirmed or not name or name in ("Unknown", "Uncertain") or confidence < self.min_confidence:
             return None
 
+        track_key = (camera_id, track_id)
+
         with self._lock:
-            # 1. In-Track Suppression: already logged for this track
-            if track_id in self.logged_tracks:
+            # 1. In-Track Suppression: already logged for this (camera_id, track_id) crossing
+            if track_key in self.logged_tracks:
                 return None
 
-            # 2. Cooldown Suppression: check if this person logged recently
+            # 2. Direction-Aware Cooldown Suppression: check if this person logged recently in this direction
             now = time.time()
-            last_time = self.last_attendance_time.get(name, 0.0)
+            dir_key = (name, direction)
+            last_time = self.last_attendance_time.get(dir_key, 0.0)
             if now - last_time < self.cooldown_seconds:
                 # Still within cooldown window
                 logger.debug(
-                    f"Attendance suppressed for '{name}': in cooldown ({int(now - last_time)}s / {self.cooldown_seconds}s)"
+                    f"Attendance suppressed for '{name}' [{direction}]: in cooldown "
+                    f"({int(now - last_time)}s / {self.cooldown_seconds}s)"
                 )
-                self.logged_tracks.add(track_id)  # Also mark this track so it doesn't re-check
+                self.logged_tracks.add(track_key)
                 return None
 
-            # 3. Stability check: count consecutive observations on this track
-            if track_id not in self.track_identities_history:
-                self.track_identities_history[track_id] = {}
-            history = self.track_identities_history[track_id]
+            # 3. Stability check: count consecutive observations on this isolated camera track
+            if track_key not in self.track_identities_history:
+                self.track_identities_history[track_key] = {}
+            history = self.track_identities_history[track_key]
             history[name] = history.get(name, 0) + 1
 
             if history[name] < self.min_stable_frames:
@@ -121,17 +130,18 @@ class AttendanceManager:
                 "quality_score": round(float(best_qual), 1),
                 "camera_id": camera_id,
                 "track_id": track_id,
+                "direction": direction,
                 "timestamp": now,
                 "time_str": time_str,
                 "status": "CONFIRMED"
             }
 
             self.events.append(event)
-            self.logged_tracks.add(track_id)
-            self.last_attendance_time[name] = now
+            self.logged_tracks.add(track_key)
+            self.last_attendance_time[dir_key] = now
 
             logger.info(
-                f"✓ Attendance EVENT LOGGED: '{name}' ({confidence:.1f}%) | "
+                f"✓ Attendance EVENT LOGGED: '{name}' ({confidence:.1f}%) [{direction}] | "
                 f"Camera {camera_id} | Track #{track_id} | Time: {time_str}"
             )
 
@@ -140,10 +150,10 @@ class AttendanceManager:
 
             return event
 
-    def is_track_logged(self, track_id):
-        """Check if a track ID has already been recorded for attendance."""
+    def is_track_logged(self, track_id, camera_id=0):
+        """Check if a (camera_id, track_id) has already been recorded for attendance."""
         with self._lock:
-            return track_id in self.logged_tracks
+            return (camera_id, track_id) in self.logged_tracks or track_id in self.logged_tracks
 
     def get_recent_events(self, limit=50):
         """Return the most recent attendance events."""

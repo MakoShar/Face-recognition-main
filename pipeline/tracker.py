@@ -13,11 +13,13 @@ import numpy as np
 import logging
 from collections import OrderedDict
 
+import config
+
 logger = logging.getLogger(__name__)
 
 
 class TrackedFace:
-    """Represents a tracked face across frames with multi-frame observation fusion."""
+    """Represents a tracked face across frames with multi-frame observation fusion and state confirmation."""
 
     def __init__(self, track_id, bbox, name="Unknown", similarity=0.0, confidence=0.0, pose="None", window_size=6):
         self.track_id = track_id
@@ -32,6 +34,20 @@ class TrackedFace:
         self.window_size = window_size
         self.observations = []  # list of recent frame observation dicts
 
+        # State confirmation tracking (Section 5)
+        self.raw_name = name
+        self.confirmed_name = "Unknown"
+        self.is_confirmed = False
+        self.candidate_name = None
+        self.consistent_observations = 0
+        self.contradiction_count = 0
+
+        # Trajectory & motion direction
+        cx = (bbox[0] + bbox[2]) * 0.5
+        cy = (bbox[1] + bbox[3]) * 0.5
+        self.centroid_history = [(cx, cy, time.time())]
+        self.direction = "Stationary"
+
         # Best-quality observation retained across entire track lifecycle
         self.best_quality_score = 0.0
         self.best_observation = None  # {name, confidence, similarity, pose, quality, timestamp}
@@ -41,13 +57,54 @@ class TrackedFace:
         self.attendance_event_id = None
         self.start_time = time.time()
 
+    def update_bbox(self, new_bbox):
+        """Update track bounding box and record trajectory centroid."""
+        self.bbox = new_bbox
+        cx = (new_bbox[0] + new_bbox[2]) * 0.5
+        cy = (new_bbox[1] + new_bbox[3]) * 0.5
+        self.centroid_history.append((cx, cy, time.time()))
+        if len(self.centroid_history) > 30:
+            self.centroid_history.pop(0)
+
+        # Calculate motion direction along vertical axis
+        if len(self.centroid_history) >= 3:
+            first_cy = self.centroid_history[0][1]
+            last_cy = self.centroid_history[-1][1]
+            dy = last_cy - first_cy
+            if dy > 20.0:
+                self.direction = "Entry"
+            elif dy < -20.0:
+                self.direction = "Exit"
+            else:
+                self.direction = "Stationary"
+
     def add_observation(self, name, similarity, confidence, pose="None", quality=100.0):
         """
-        Record a frame observation, retain best-quality observations,
+        Record a frame observation, validate stability, detect contradictions,
         and combine observations across the temporal window.
         """
         self.frames_since_recognition = 0
+        self.raw_name = name
+        now = time.time()
+
+        # Frame Redundancy Check:
+        # Do not treat adjacent frames as independent proof when image position and timing are virtually identical
+        is_redundant = False
+        if self.observations:
+            last_obs = self.observations[-1]
+            time_delta = now - last_obs.get('timestamp', 0.0)
+            if time_delta < 0.05 and len(self.centroid_history) >= 2:
+                c_now = self.centroid_history[-1]
+                c_prev = self.centroid_history[-2]
+                c_dist = np.hypot(c_now[0] - c_prev[0], c_now[1] - c_prev[1])
+                if c_dist < 4.0:
+                    is_redundant = True
+
+        min_conf_obs = getattr(config, 'TRACK_CONFIRMATION_MIN_OBSERVATIONS', 3)
+        max_contr = getattr(config, 'TRACK_MAX_CONTRADICTIONS', 1)
+
         composite_quality = float(quality) * max(0.5, float(confidence) / 100.0)
+
         obs = {
             'name': name,
             'confidence': float(confidence),
@@ -56,7 +113,7 @@ class TrackedFace:
             'quality': float(quality),
             'quality_score': float(quality),
             'composite_quality': float(composite_quality),
-            'timestamp': time.time()
+            'timestamp': now
         }
         self.observations.append(obs)
         if len(self.observations) > self.window_size:
@@ -67,7 +124,59 @@ class TrackedFace:
             self.best_quality_score = composite_quality
             self.best_observation = dict(obs)
 
+        # ─── Confirmation & Contradiction Logic (Section 5) ───
+        if name != "Unknown" and confidence >= getattr(config, 'CONFIDENCE_THRESHOLD_YELLOW', 60.0):
+            if self.candidate_name is None:
+                self.candidate_name = name
+                self.consistent_observations = 1 if not is_redundant else 0
+                self.contradiction_count = 0
+            elif self.candidate_name == name:
+                if not is_redundant:
+                    self.consistent_observations += 1
+                self.contradiction_count = 0
+                if self.consistent_observations >= min_conf_obs:
+                    self.is_confirmed = True
+                    self.confirmed_name = name
+            else:
+                # Contradiction: confident evidence for a competing identity
+                self.contradiction_count += 1
+                logger.info(
+                    f"[Tracker] Track #{self.track_id} contradiction: candidate '{self.candidate_name}' "
+                    f"vs new '{name}' (contradictions={self.contradiction_count})"
+                )
+                if self.contradiction_count > max_contr:
+                    # Revoke confirmed identity immediately!
+                    logger.warning(
+                        f"[Tracker] Revoking match on track #{self.track_id} "
+                        f"('{self.confirmed_name}') due to persistent contradictions"
+                    )
+                    self.is_confirmed = False
+                    self.confirmed_name = "Unknown"
+                    self.candidate_name = name
+                    self.consistent_observations = 1
+                    self.contradiction_count = 0
+                    self.observations = [obs]
+                    self.attendance_logged = False
+        else:
+            # Observation was Unknown or low confidence
+            if self.candidate_name is not None and confidence < 40.0:
+                self.contradiction_count += 1
+                if self.contradiction_count > max_contr * 2:
+                    self.is_confirmed = False
+                    self.confirmed_name = "Unknown"
+                    self.candidate_name = None
+                    self.consistent_observations = 0
+
         self._combine_observations()
+
+        # Enforce confirmed naming
+        if self.is_confirmed:
+            self.name = self.confirmed_name
+        elif self.candidate_name is not None and self.consistent_observations >= 1:
+            self.name = self.candidate_name
+        else:
+            self.name = "Unknown"
+
         return self.name, self.confidence, self.similarity, self.pose
 
     def _combine_observations(self):
@@ -96,7 +205,6 @@ class TrackedFace:
         smoothed_conf = sum(o['confidence'] * w for o, w in zip(win_obs, exp_weights)) / sum_w
         smoothed_sim = sum(o['similarity'] * w for o, w in zip(win_obs, exp_weights)) / sum_w
 
-        self.name = winning_name
         self.confidence = float(smoothed_conf)
         self.similarity = float(smoothed_sim)
         self.pose = win_obs[-1].get('pose', 'Front')
@@ -113,8 +221,8 @@ class FaceTracker:
     This tracker does NOT replace identity verification.
     """
 
-    def __init__(self, iou_threshold=0.3, max_disappeared=15,
-                 recognition_interval=10):
+    def __init__(self, iou_threshold=0.3, max_disappeared=5,
+                 recognition_interval=1):
         """
         Args:
             iou_threshold: Minimum IoU to associate a detection with a track
@@ -144,7 +252,7 @@ class FaceTracker:
             return 0.0
         return inter_area / union_area
 
-    def _compute_match_score(self, box_a, box_b):
+    def _compute_match_score(self, box_a, box_b, disappeared_count=0):
         """
         Compute association score combining IoU and normalized centroid proximity.
         Ensures continuous tracking as individuals move through the recognition zone.
@@ -153,19 +261,21 @@ class FaceTracker:
         if iou >= self.iou_threshold:
             return 1.0 + iou
 
-        # Centroid distance fallback
-        cx_a = (box_a[0] + box_a[2]) * 0.5
-        cy_a = (box_a[1] + box_a[3]) * 0.5
-        cx_b = (box_b[0] + box_b[2]) * 0.5
-        cy_b = (box_b[1] + box_b[3]) * 0.5
+        # Centroid distance fallback: ONLY apply if track was visible in the immediate last frame (disappeared_count == 0)
+        # If the track was lost, require actual IoU overlap to avoid latching onto a new person!
+        if disappeared_count == 0:
+            cx_a = (box_a[0] + box_a[2]) * 0.5
+            cy_a = (box_a[1] + box_a[3]) * 0.5
+            cx_b = (box_b[0] + box_b[2]) * 0.5
+            cy_b = (box_b[1] + box_b[3]) * 0.5
 
-        w_a = max(1.0, box_a[2] - box_a[0])
-        h_a = max(1.0, box_a[3] - box_a[1])
-        diag = np.sqrt(w_a * w_a + h_a * h_a)
+            w_a = max(1.0, box_a[2] - box_a[0])
+            h_a = max(1.0, box_a[3] - box_a[1])
+            diag = np.sqrt(w_a * w_a + h_a * h_a)
 
-        c_dist = np.sqrt((cx_a - cx_b) ** 2 + (cy_a - cy_b) ** 2) / diag
-        if c_dist < 0.60:
-            return 0.5 + (0.60 - c_dist)
+            c_dist = np.sqrt((cx_a - cx_b) ** 2 + (cy_a - cy_b) ** 2) / diag
+            if c_dist < 0.40:
+                return 0.5 + (0.40 - c_dist)
 
         return 0.0
 
@@ -197,7 +307,7 @@ class FaceTracker:
             disappeared_ids = []
             for track_id, track in self.tracks.items():
                 track.disappeared_count += 1
-                if track.disappeared_count > self.max_disappeared:
+                if track.disappeared_count >= self.max_disappeared:
                     disappeared_ids.append(track_id)
             for tid in disappeared_ids:
                 self._deregister(tid)
@@ -213,8 +323,10 @@ class FaceTracker:
         # Greedy assignment: match highest score pairs first
         pairs = []
         for t in range(num_tracks):
+            tid = track_ids[t]
+            disp = self.tracks[tid].disappeared_count
             for d in range(num_dets):
-                score = self._compute_match_score(track_bboxes[t], current_bboxes[d])
+                score = self._compute_match_score(track_bboxes[t], current_bboxes[d], disappeared_count=disp)
                 if score > 0.0:
                     pairs.append((score, t, d))
 
@@ -232,7 +344,7 @@ class FaceTracker:
             track = self.tracks[track_id]
 
             # Update track
-            track.bbox = current_bboxes[d_idx]
+            track.update_bbox(current_bboxes[d_idx])
             track.disappeared_count = 0
             track.frames_since_recognition += 1
             track.total_frames += 1
@@ -254,7 +366,7 @@ class FaceTracker:
                 track_id = track_ids[t_idx]
                 track = self.tracks[track_id]
                 track.disappeared_count += 1
-                if track.disappeared_count > self.max_disappeared:
+                if track.disappeared_count >= self.max_disappeared:
                     disappeared_ids.append(track_id)
 
         for tid in disappeared_ids:

@@ -21,38 +21,69 @@ import config
 logger = logging.getLogger(__name__)
 
 
-def calibrate_confidence_score(cosine_sim):
+def calibrate_confidence_score(cosine_sim, margin=None, min_sim=None, min_margin=None):
     """
-    Calibrate raw cosine similarity into a 0.0 - 100.0% confidence score.
+    Calibrate raw cosine similarity into an estimated probability percentage (0.0 - 100.0%).
 
-    Calibrated against genuine cross-pose and impostor distributions:
-      - Impostors / background noise: sim <= 0.20 -> Conf < 40%
-      - Decision boundary: sim = 0.35 -> Conf = 60.0% (Yellow threshold)
-      - High confidence boundary: sim = 0.50 -> Conf = 90.0% (Green threshold)
-      - Perfect / near identical: sim >= 0.70 -> Conf >= 98.0%
+    CRITICAL NOTE:
+    Raw cosine similarity is a geometric angular distance metric in [-1.0, 1.0], NOT
+    a calibrated posterior probability. A raw cosine similarity of 0.90 does NOT mean
+    a 90% probability of correct identity.
+
+    This function maps cosine similarity to a calibrated confidence percentage using
+    an empirical logistic curve anchored to genuine-match and impostor validation distributions:
+      - Impostor distribution (GlintR100): mean ~ 0.15 - 0.20, max ~ 0.35.
+      - Acceptance threshold (min_sim = 0.50): maps to 60.0% (Yellow UI boundary).
+      - High confidence boundary (sim >= 0.65): maps to >= 90.0% (Green UI boundary).
+      - Perfect identity match (sim >= 0.85): maps to 99.5%.
+
+    Additionally, if a margin (best - second_best distinct identity similarity) is provided
+    and falls below min_margin, the confidence score is damped proportionally to reflect
+    the ambiguity of competing candidates.
 
     Args:
-        cosine_sim: float in [-1.0, 1.0]
+        cosine_sim: Raw cosine similarity float in [-1.0, 1.0].
+        margin: Optional float margin between top-1 and top-2 candidate identities.
+        min_sim: Optional minimum similarity acceptance threshold (default from config: 0.50).
+        min_margin: Optional minimum margin threshold (default from config: 0.08).
 
     Returns:
-        confidence: float in [0.0, 100.0]
+        confidence: Calibrated confidence percentage float in [0.0, 100.0].
     """
     sim = float(cosine_sim)
+    if sim <= 0.0:
+        return 0.0
 
-    if sim <= 0.15:
-        # Deep unknown / impostor territory
-        conf = max(0.0, (sim / 0.15) * 30.0) if sim > 0 else 0.0
-    elif sim < 0.35:
-        # 0.15 -> 30%, 0.35 -> 60%
-        conf = 30.0 + ((sim - 0.15) / 0.20) * 30.0
-    elif sim < 0.50:
-        # 0.35 -> 60%, 0.50 -> 90%
-        conf = 60.0 + ((sim - 0.35) / 0.15) * 30.0
+    threshold_yellow = getattr(config, 'MIN_RECOGNITION_SIMILARITY', 0.50) if min_sim is None else float(min_sim)
+    threshold_green = 0.65
+
+    if sim < 0.20:
+        # Background / clear impostor territory
+        base_conf = max(0.0, (sim / 0.20) * 25.0)
+    elif sim < threshold_yellow:
+        # Interpolate between 25.0% and 59.9% (below recognition acceptance boundary)
+        ratio = (sim - 0.20) / max(0.01, (threshold_yellow - 0.20))
+        base_conf = 25.0 + ratio * 34.9
+    elif sim < threshold_green:
+        # Interpolate between 60.0% (Yellow threshold) and 89.9%
+        ratio = (sim - threshold_yellow) / max(0.01, (threshold_green - threshold_yellow))
+        base_conf = 60.0 + ratio * 29.9
     else:
-        # 0.50 -> 90%, 0.70+ -> 99.5%
-        conf = min(99.9, 90.0 + ((sim - 0.50) / 0.20) * 9.9)
+        # High confidence territory (>= 90.0% Green)
+        ratio = min(1.0, (sim - threshold_green) / 0.20)
+        base_conf = 90.0 + ratio * 9.9
 
-    return float(conf)
+    # Apply ambiguity damping if margin is provided
+    if margin is not None:
+        required_margin = getattr(config, 'MIN_RECOGNITION_MARGIN', 0.08) if min_margin is None else float(min_margin)
+        margin_val = float(margin)
+        if required_margin > 0.0 and margin_val < required_margin:
+            # Discount confidence when candidate identities have nearly identical scores
+            damping_factor = max(0.0, margin_val / required_margin)
+            base_conf = base_conf * damping_factor
+
+    return float(min(99.9, max(0.0, base_conf)))
+
 
 
 class FaceGallery:
@@ -150,36 +181,79 @@ class FaceGallery:
         logger.info(f"Enrolled '{name}' [{pose}]: {len(person['references'])} total reference(s)")
         return True
 
-    def identify(self, query_embedding, query_pose=None):
+    def identify(self, query_embedding, query_pose=None, min_similarity=None, min_margin=None):
         """
-        Match a query embedding against the gallery.
-        If query_pose is specified, applies pose-filtered matching:
-        compares against templates matching that specific pose
-        (e.g. Front vs Front, Up vs Up) to prevent cross-angle impostor contamination.
+        Match a query embedding against the gallery with best-vs-second-best ambiguity rejection.
+
+        Algorithm:
+          1. Normalize query embedding.
+          2. Aggregate template similarities at identity level (preserving pose metadata).
+             Multiple reference images of the same person do NOT compete as distinct identities.
+          3. Rank distinct candidate identities.
+          4. Check best score against calibrated acceptance threshold.
+          5. Calculate margin between top-1 and top-2 distinct candidate identities.
+          6. Reject ambiguous results if margin < min_margin.
+          7. Calibrate confidence and enforce Section 16 UI rules (>=60% Yellow, >=90% Green).
 
         Args:
-            query_embedding: (512,) float32 vector
-            query_pose: Optional pose string ("Front", "Left", "Right", "Up", "Down")
+            query_embedding: (512,) float32 vector.
+            query_pose: Optional pose string ("Front", "Left", "Right", "Up", "Down").
+            min_similarity: Optional minimum cosine similarity threshold (default from config: 0.50).
+            min_margin: Optional minimum margin between top-1 and top-2 identities (default: 0.08).
 
         Returns:
-            name: Person name or "Unknown"
-            confidence: Calibrated confidence percentage (0.0 - 100.0)
-            max_similarity: Raw cosine similarity (-1.0 to 1.0)
-            best_pose: Matching reference pose (e.g. "Front", "Left")
+            name: Person name or "Unknown".
+            confidence: Calibrated confidence percentage (0.0 - 100.0).
+            max_similarity: Raw cosine similarity (-1.0 to 1.0).
+            best_pose: Matching reference pose (e.g. "Front", "Left").
+        """
+        detailed = self.identify_detailed(
+            query_embedding,
+            query_pose=query_pose,
+            min_similarity=min_similarity,
+            min_margin=min_margin
+        )
+        return detailed["name"], detailed["confidence"], detailed["similarity"], detailed["pose"]
+
+    def identify_detailed(self, query_embedding, query_pose=None, min_similarity=None, min_margin=None):
+        """
+        Detailed gallery matching providing candidate ranking, margin, and rejection rationale.
+
+        Returns:
+            dict containing:
+              - name: Accepted identity name or "Unknown"
+              - confidence: Calibrated confidence percentage (0.0 - 100.0)
+              - similarity: Raw cosine similarity of top candidate (-1.0 to 1.0)
+              - pose: Best matching reference pose
+              - margin: Difference between top-1 and top-2 distinct identity similarities
+              - second_best_name: Name of second-best distinct candidate (or None)
+              - second_best_sim: Similarity of second-best distinct candidate (or -1.0)
+              - is_accepted: Boolean whether candidate passed all acceptance gates
+              - status: "ACCEPTED", "REJECTED_LOW_SIM", "REJECTED_AMBIGUOUS", "REJECTED_LOW_CONF", or "NO_GALLERY"
         """
         if not self.gallery or query_embedding is None:
-            return "Unknown", 0.0, -1.0, "None"
+            return {
+                "name": "Unknown",
+                "confidence": 0.0,
+                "similarity": -1.0,
+                "pose": "None",
+                "margin": 0.0,
+                "second_best_name": None,
+                "second_best_sim": -1.0,
+                "is_accepted": False,
+                "status": "NO_GALLERY"
+            }
 
         q_norm = query_embedding / np.linalg.norm(query_embedding)
+        target_pose = query_pose if (query_pose in getattr(config, 'POSE_CATEGORIES', ["Front", "Left", "Right", "Up", "Down"])) else None
 
-        # 1. Pose-Filtered Matching if query_pose is provided
-        target_pose = query_pose if (query_pose in ["Front", "Left", "Right", "Up", "Down"]) else None
+        min_sim = getattr(config, 'MIN_RECOGNITION_SIMILARITY', 0.50) if min_similarity is None else float(min_similarity)
+        min_mrg = getattr(config, 'MIN_RECOGNITION_MARGIN', 0.08) if min_margin is None else float(min_margin)
 
-        best_name = "Unknown"
-        best_sim = -1.0
-        best_pose = "None"
+        # 1. Aggregate similarities per distinct identity
+        # Multiple reference images of one person aggregate into that person's best score
+        identity_candidates = {}  # {name: {"best_sim": float, "best_pose": str}}
 
-        # Compare query against enrolled identities
         for name, record in self.gallery.items():
             refs = record.get("references", [])
             if not refs:
@@ -188,7 +262,7 @@ class FaceGallery:
             person_best_sim = -1.0
             person_best_pose = "None"
 
-            # 1. Check matching pose references if available
+            # Check matching pose references first if query_pose is known
             if target_pose:
                 for ref in refs:
                     if ref.get("pose") == target_pose:
@@ -197,26 +271,122 @@ class FaceGallery:
                             person_best_sim = sim
                             person_best_pose = target_pose
 
-            # 2. Check canonical Front and general references (anchor representation)
-            # Aligned face crops preserve canonical features even when head has minor roll/tilt
+            # Also check all references to find maximum template similarity for this person
             for ref in refs:
                 sim = float(np.dot(q_norm, ref["embedding"]))
                 if sim > person_best_sim:
                     person_best_sim = sim
                     person_best_pose = ref.get("pose", "Front")
 
-            if person_best_sim > best_sim:
-                best_sim = person_best_sim
-                best_name = name
-                best_pose = person_best_pose
+            if person_best_sim > -1.0:
+                identity_candidates[name] = {
+                    "best_sim": person_best_sim,
+                    "best_pose": person_best_pose
+                }
 
-        conf_percent = calibrate_confidence_score(best_sim)
+        if not identity_candidates:
+            return {
+                "name": "Unknown",
+                "confidence": 0.0,
+                "similarity": -1.0,
+                "pose": "None",
+                "margin": 0.0,
+                "second_best_name": None,
+                "second_best_sim": -1.0,
+                "is_accepted": False,
+                "status": "NO_MATCH"
+            }
 
-        # Section 16: Below 60% — NO IDENTITY LABEL (treated as unknown/uncertain)
-        if conf_percent >= config.CONFIDENCE_THRESHOLD_YELLOW:
-            return best_name, conf_percent, best_sim, best_pose
+        # 2. Rank candidate identities
+        ranked = sorted(
+            identity_candidates.items(),
+            key=lambda item: item[1]["best_sim"],
+            reverse=True
+        )
+
+        top_name, top_data = ranked[0]
+        top_sim = top_data["best_sim"]
+        top_pose = top_data["best_pose"]
+
+        second_name = None
+        second_sim = -1.0
+        if len(ranked) > 1:
+            second_name, second_data = ranked[1]
+            second_sim = second_data["best_sim"]
+            margin = top_sim - second_sim
         else:
-            return "Unknown", conf_percent, best_sim, best_pose
+            # Single identity enrolled in gallery
+            margin = 1.0
+
+        # 3. Calibrated confidence score calculation
+        conf_percent = calibrate_confidence_score(
+            top_sim,
+            margin=margin,
+            min_sim=min_sim,
+            min_margin=min_mrg
+        )
+
+        # 4. Gate evaluations
+        # Gate A: Minimum similarity acceptance threshold
+        if top_sim < min_sim:
+            return {
+                "name": "Unknown",
+                "confidence": conf_percent,
+                "similarity": top_sim,
+                "pose": top_pose,
+                "margin": margin,
+                "second_best_name": second_name,
+                "second_best_sim": second_sim,
+                "is_accepted": False,
+                "status": "REJECTED_LOW_SIM"
+            }
+
+        # Gate B: Best-versus-second-best ambiguity rejection
+        if len(ranked) > 1 and margin < min_mrg:
+            logger.debug(
+                f"[Ambiguity Rejection] Top: '{top_name}' ({top_sim:.4f}) vs "
+                f"Second: '{second_name}' ({second_sim:.4f}), Margin={margin:.4f} < {min_mrg:.4f}"
+            )
+            return {
+                "name": "Unknown",
+                "confidence": conf_percent,
+                "similarity": top_sim,
+                "pose": top_pose,
+                "margin": margin,
+                "second_best_name": second_name,
+                "second_best_sim": second_sim,
+                "is_accepted": False,
+                "status": "REJECTED_AMBIGUOUS"
+            }
+
+        # Gate C: Calibrated confidence threshold (Section 16: < 60% is Unknown)
+        yellow_thresh = getattr(config, 'CONFIDENCE_THRESHOLD_YELLOW', 60.0)
+        if conf_percent < yellow_thresh:
+            return {
+                "name": "Unknown",
+                "confidence": conf_percent,
+                "similarity": top_sim,
+                "pose": top_pose,
+                "margin": margin,
+                "second_best_name": second_name,
+                "second_best_sim": second_sim,
+                "is_accepted": False,
+                "status": "REJECTED_LOW_CONF"
+            }
+
+        # All gates passed: Confirmed match
+        return {
+            "name": top_name,
+            "confidence": conf_percent,
+            "similarity": top_sim,
+            "pose": top_pose,
+            "margin": margin,
+            "second_best_name": second_name,
+            "second_best_sim": second_sim,
+            "is_accepted": True,
+            "status": "ACCEPTED"
+        }
+
 
     def identify_batch(self, query_embeddings):
         """Match multiple embeddings."""

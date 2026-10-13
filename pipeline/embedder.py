@@ -86,6 +86,7 @@ class FaceEmbedder:
         sess_options = ort.SessionOptions()
         sess_options.intra_op_num_threads = num_threads
         sess_options.inter_op_num_threads = num_threads
+        sess_options.log_severity_level = 3  # Suppress benign dynamic batch shape mismatch warnings
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
         # Load ONNX session
