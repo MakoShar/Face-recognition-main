@@ -1403,3 +1403,161 @@ body::after {
     background: rgba(255, 255, 255, 0.01);
 }
 
+/* ─── Attendance Section ────────────────────────────────────────── */
+.attendance-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-lg);
+    box-shadow: var(--shadow-md);
+    position: relative;
+    backdrop-filter: blur(12px);
+    margin-bottom: var(--space-xl);
+}
+
+.panel-header-title {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.panel-subtitle {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.attendance-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.attendance-stats-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(99, 102, 241, 0.12);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    color: #c7d2fe;
+    font-size: 0.8rem;
+    padding: 5px 12px;
+    border-radius: 9999px;
+}
+
+.attendance-stats-pill strong {
+    color: #fff;
+}
+
+.stats-sep {
+    opacity: 0.4;
+}
+
+.attendance-content {
+    margin-top: var(--space-md);
+}
+
+.table-container {
+    width: 100%;
+    overflow-x: auto;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    background: rgba(10, 14, 23, 0.5);
+}
+
+.attendance-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    text-align: left;
+}
+
+.attendance-table th {
+    background: rgba(17, 24, 39, 0.9);
+    padding: 12px 16px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.attendance-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+    vertical-align: middle;
+}
+
+.attendance-table tbody tr {
+    transition: background var(--transition-fast);
+}
+
+.attendance-table tbody tr:hover:not(.attendance-empty-row) {
+    background: rgba(99, 102, 241, 0.05);
+}
+
+.attendance-empty-row td {
+    padding: 40px 16px;
+    text-align: center;
+}
+
+.empty-state-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+}
+
+.empty-state-content svg {
+    color: var(--text-muted);
+    opacity: 0.6;
+}
+
+.badge-track {
+    background: rgba(148, 163, 184, 0.15);
+    color: #cbd5e1;
+    font-family: monospace;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 0.78rem;
+}
+
+.badge-conf-high {
+    background: rgba(72, 199, 142, 0.18);
+    color: #48c78e;
+    border: 1px solid rgba(72, 199, 142, 0.4);
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 9999px;
+    font-size: 0.78rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.badge-conf-med {
+    background: rgba(245, 158, 11, 0.18);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 9999px;
+    font-size: 0.78rem;
+}
+
+.badge-logged {
+    background: rgba(99, 102, 241, 0.2);
+    color: #818cf8;
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    padding: 3px 8px;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+

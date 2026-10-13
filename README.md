@@ -17,15 +17,12 @@ Production-grade, GPU-accelerated face recognition system featuring:
 
 ```mermaid
 graph LR
-    Cam[Camera Stream] --> Sampler[1-in-5 Sampler]
-    Sampler --> Det[BlazeFace Detection]
-    Det --> Align[Canonical 4-Point Alignment]
-    Align --> Pose[ResNet-50 3D Pose Estimator]
-    Align --> Embed[GlintR100 / AdaFace ONNX CUDA]
-    Pose --> Match[Pose-Aware Multi-Reference Gallery]
-    Embed --> Match
-    Match --> Track[IoU Tracker & Cache]
-    Track --> HUD[Dashboard Annotations & HUD]
+    Cam[1. Camera Stream] --> Det[2. BlazeFace Detection]
+    Det --> Gate[3. Face Quality & Pose Check + Realignment]
+    Gate --> Embed[4. GlintR100 Embeddings CUDA]
+    Embed --> Match[5. Employee Gallery Matching]
+    Match --> Fusion[6. Combine Observations Across Frames]
+    Fusion --> Decision[7. Identity or Unknown -> Confidence Score]
 ```
 
 ---

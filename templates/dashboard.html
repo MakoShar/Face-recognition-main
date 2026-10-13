@@ -39,12 +39,12 @@
                     {% endfor %}
                 </select>
             </div>
-            <!-- Train Model Button -->
-            <button class="btn btn-train" id="btn-header-train" onclick="openTrainModal()" title="Train Model on Videos in data/raw_videos">
+            <!-- Generate Embeddings Button -->
+            <button class="btn btn-train" id="btn-header-train" onclick="openTrainModal()" title="Generate Embeddings from Videos in data/raw_videos">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                     <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
                 </svg>
-                <span>Train</span>
+                <span>Generate Embeddings</span>
             </button>
             <div class="status-pill" id="engine-status">
                 <span class="status-dot active" id="status-dot"></span>
@@ -255,6 +255,69 @@
             {% endfor %}
         </section>
 
+        <!-- ─── Verified Attendance Events Section ────────────────── -->
+        <section class="attendance-section" id="attendance-section">
+            <div class="panel-header">
+                <div class="panel-header-title">
+                    <h2>
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+                            <path d="M9 11l3 3L22 4"/>
+                            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                        </svg>
+                        Continuous Tracking &amp; Verified Attendance
+                    </h2>
+                    <span class="panel-subtitle">Observation tracks retained with best-quality frames &bull; Duplicate events suppressed</span>
+                </div>
+                <div class="attendance-header-actions">
+                    <div class="attendance-stats-pill">
+                        <span>Logged: <strong id="att-count">0</strong></span>
+                        <span class="stats-sep">|</span>
+                        <span>Unique: <strong id="att-unique">0</strong></span>
+                    </div>
+                    <button class="btn btn-secondary btn-sm" id="btn-clear-attendance" onclick="clearAttendance()" title="Clear attendance log">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"/>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                        </svg>
+                        Clear Log
+                    </button>
+                </div>
+            </div>
+
+            <div class="attendance-content">
+                <div class="table-container">
+                    <table class="attendance-table" id="attendance-table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Person</th>
+                                <th>Track ID</th>
+                                <th>Confidence</th>
+                                <th>Best Quality</th>
+                                <th>Best Pose</th>
+                                <th>Camera</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="attendance-tbody">
+                            <tr class="attendance-empty-row">
+                                <td colspan="8">
+                                    <div class="empty-state-content">
+                                        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5">
+                                            <circle cx="12" cy="12" r="10"/>
+                                            <path d="M12 6v6l4 2"/>
+                                        </svg>
+                                        <p>No attendance events logged yet.</p>
+                                        <span class="text-muted">Requires &ge; 85% confidence and 3 stable tracking frames. Duplicate check-ins suppressed.</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
         <!-- ─── Pose-Aware Video Enrollment Section ────────────────── -->
         <section class="enrollment-section" id="enrollment-section">
             <div class="panel-header">
@@ -311,7 +374,7 @@
                         <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
                             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
                         </svg>
-                        Train on Raw-Videos
+                        Generate Embeddings
                     </button>
                     <button class="btn btn-secondary" id="btn-re-enroll" onclick="reEnroll()">
                         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
@@ -341,7 +404,7 @@
                 {% if not gallery_info.enrolled_names %}
                 <div class="gallery-empty">
                     <p>No identities enrolled.</p>
-                    <p class="text-muted">Click <strong>Train on Raw-Videos</strong> or enroll above.</p>
+                    <p class="text-muted">Click <strong>Generate Embeddings</strong> or enroll above.</p>
                 </div>
                 {% endif %}
             </div>
@@ -363,8 +426,8 @@
                         </svg>
                     </div>
                     <div>
-                        <h3>Train Model Embeddings</h3>
-                        <p class="modal-subtitle">Generates pose-aware, canonically aligned embeddings from <code>data/raw_videos/</code></p>
+                        <h3>Generate Model Embeddings</h3>
+                        <p class="modal-subtitle">Extracts pose-aware, canonically aligned embeddings from <code>data/raw_videos/</code></p>
                     </div>
                 </div>
                 <button class="btn-close-modal" onclick="closeTrainModal()" title="Close">&times;</button>
@@ -373,7 +436,7 @@
             <div class="modal-body">
                 <!-- Model Selection & Trigger -->
                 <div class="train-config-group">
-                    <label for="train-model-select">Target Model to Train:</label>
+                    <label for="train-model-select">Target Model:</label>
                     <div class="train-select-row">
                         <select id="train-model-select" class="select-dropdown">
                             {% for m_id, m_cfg in available_models.items() %}
@@ -386,7 +449,7 @@
                             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                                 <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
                             </svg>
-                            Start Training
+                            Generate Embeddings
                         </button>
                     </div>
                 </div>
@@ -403,7 +466,7 @@
                 <!-- Training Progress Section -->
                 <div class="train-progress-section" id="train-progress-section" style="display:none;">
                     <div class="train-progress-header">
-                        <span class="train-status-label" id="train-status-label">Training in progress...</span>
+                        <span class="train-status-label" id="train-status-label">Generating embeddings...</span>
                         <span class="train-percent" id="train-percent">0%</span>
                     </div>
                     <div class="progress-bar-container">
@@ -434,6 +497,6 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=2"></script>
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=3"></script>
 </body>
 </html>

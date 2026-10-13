@@ -516,8 +516,8 @@ async function startTraining() {
     if (resultAlert) resultAlert.style.display = 'none';
     if (progressBar) progressBar.style.width = '0%';
     if (percentLabel) percentLabel.textContent = '0%';
-    if (stepText) stepText.textContent = `Initializing training for ${targetModel.toUpperCase()}...`;
-    if (logBox) logBox.innerHTML = `<div style="color:#a5b4fc;">Initializing training on data/raw_videos...</div>`;
+    if (stepText) stepText.textContent = `Initializing embedding extraction for ${targetModel.toUpperCase()}...`;
+    if (logBox) logBox.innerHTML = `<div style="color:#a5b4fc;">Extracting embeddings from data/raw_videos...</div>`;
 
     try {
         const response = await fetch('/api/train', {
@@ -528,24 +528,24 @@ async function startTraining() {
         const data = await response.json();
 
         if (!response.ok && data.status !== 'already_running') {
-            throw new Error(data.error || data.message || 'Failed to start training');
+            throw new Error(data.error || data.message || 'Failed to start embedding extraction');
         }
 
-        showToast(`Training started for ${data.model_display || targetModel}`, 'info');
+        showToast(`Generating embeddings for ${data.model_display || targetModel}`, 'info');
 
         // Start polling progress
         if (trainPollTimer) clearInterval(trainPollTimer);
         trainPollTimer = setInterval(pollTrainingProgress, 800);
     } catch (err) {
-        showToast(`Training error: ${err.message}`, 'error');
+        showToast(`Embedding error: ${err.message}`, 'error');
         if (resultAlert) {
             resultAlert.className = 'train-result-alert error';
             resultAlert.style.display = 'block';
-            resultAlert.textContent = `Failed to start training: ${err.message}`;
+            resultAlert.textContent = `Failed to generate embeddings: ${err.message}`;
         }
         if (startBtn) {
             startBtn.disabled = false;
-            startBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> Start Training';
+            startBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> Generate Embeddings';
         }
     }
 }
@@ -570,11 +570,11 @@ async function pollTrainingProgress() {
             if (logContainer) logContainer.style.display = 'flex';
             if (progressBar) progressBar.style.width = `${state.progress_percent || 0}%`;
             if (percentLabel) percentLabel.textContent = `${state.progress_percent || 0}%`;
-            if (stepText) stepText.textContent = state.message || 'Processing...';
+            if (stepText) stepText.textContent = state.message || 'Extracting embeddings...';
 
             if (startBtn) {
                 startBtn.disabled = true;
-                startBtn.innerHTML = '<span class="step-spinner"></span> Training...';
+                startBtn.innerHTML = '<span class="step-spinner"></span> Generating Embeddings...';
             }
         }
 
@@ -604,7 +604,7 @@ async function pollTrainingProgress() {
                 resultAlert.className = 'train-result-alert success';
                 resultAlert.style.display = 'block';
                 resultAlert.innerHTML = `
-                    <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 4px;">✓ Training Successfully Completed!</div>
+                    <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 4px;">✓ Embeddings Generated Successfully!</div>
                     <div>Model: <strong>${escapeHtml(state.model_display || state.model)}</strong></div>
                     <div>Identities Enrolled: <strong>${state.result?.identities_enrolled || 0}</strong> &bull; Total Reference Vectors: <strong>${state.result?.total_embeddings || 0}</strong></div>
                     <div style="font-size:0.8rem; opacity:0.85; margin-top:4px;">Embeddings saved to: <code>${escapeHtml(state.result?.cache_file || '')}</code></div>
@@ -613,10 +613,10 @@ async function pollTrainingProgress() {
 
             if (startBtn) {
                 startBtn.disabled = false;
-                startBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> Train Again';
+                startBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> Regenerate Embeddings';
             }
 
-            showToast('Training complete! Gallery updated.', 'success');
+            showToast('Embeddings generated! Gallery updated.', 'success');
             // Refresh dashboard gallery
             pollStatus();
         } else if (state.status === 'error') {
@@ -626,17 +626,17 @@ async function pollTrainingProgress() {
             if (resultAlert) {
                 resultAlert.className = 'train-result-alert error';
                 resultAlert.style.display = 'block';
-                resultAlert.textContent = state.message || 'Training failed with an unexpected error.';
+                resultAlert.textContent = state.message || 'Embedding extraction encountered an error.';
             }
 
             if (startBtn) {
                 startBtn.disabled = false;
-                startBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> Retry Training';
+                startBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> Retry Generating';
             }
-            showToast('Training encountered an error', 'error');
+            showToast('Embedding generation encountered an error', 'error');
         }
     } catch (e) {
-        console.error('Failed to poll training progress:', e);
+        console.error('Failed to poll progress:', e);
     }
 }
 
@@ -665,11 +665,97 @@ function escapeHtml(str) {
         .replace(/'/g, '&#039;');
 }
 
+// ─── Attendance Polling & Controls ─────────────────────────────────
+async function pollAttendance() {
+    try {
+        const response = await fetch('/api/attendance?limit=25');
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const events = data.events || [];
+        const summary = data.summary || {};
+
+        // Update pills
+        const countEl = document.getElementById('att-count');
+        if (countEl) countEl.textContent = summary.total_events || 0;
+
+        const uniqueEl = document.getElementById('att-unique');
+        if (uniqueEl) uniqueEl.textContent = summary.unique_individuals || 0;
+
+        // Update table
+        const tbody = document.getElementById('attendance-tbody');
+        if (!tbody) return;
+
+        if (events.length === 0) {
+            tbody.innerHTML = `
+                <tr class="attendance-empty-row">
+                    <td colspan="8">
+                        <div class="empty-state-content">
+                            <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <circle cx="12" cy="12" r="10"/>
+                                <path d="M12 6v6l4 2"/>
+                            </svg>
+                            <p>No attendance events logged yet.</p>
+                            <span class="text-muted">Requires &ge; 85% confidence and 3 stable tracking frames. Duplicate check-ins suppressed.</span>
+                        </div>
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+
+        // Format and render recent events
+        tbody.innerHTML = events.map(ev => {
+            const timeStr = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : '--:--:--';
+            const confClass = ev.confidence >= 90 ? 'badge-conf-high' : 'badge-conf-med';
+            const qualityStr = ev.quality_score ? ev.quality_score.toFixed(1) : '--';
+            const poseStr = ev.pose || 'Front';
+
+            return `
+                <tr>
+                    <td style="font-family: monospace; color: var(--text-secondary);">${timeStr}</td>
+                    <td><strong>${escapeHtml(ev.name)}</strong></td>
+                    <td><span class="badge-track">#${ev.track_id}</span></td>
+                    <td><span class="${confClass}">${(ev.confidence || 0).toFixed(1)}%</span></td>
+                    <td style="color: var(--text-secondary);">${qualityStr}</td>
+                    <td><span class="mini-pose-badge">${escapeHtml(poseStr)}</span></td>
+                    <td><span style="color: var(--text-muted);">Cam ${ev.camera_id}</span></td>
+                    <td><span class="badge-logged">Logged</span></td>
+                </tr>
+            `;
+        }).join('');
+
+    } catch (e) {
+        console.debug('Attendance poll failed:', e);
+    }
+}
+
+async function clearAttendance() {
+    if (!confirm('Clear all logged attendance records?')) return;
+
+    try {
+        const response = await fetch('/api/attendance/clear', { method: 'POST' });
+        const data = await response.json();
+        if (response.ok && data.status === 'success') {
+            showToast('Attendance log cleared', 'success');
+            pollAttendance();
+        } else {
+            showToast('Failed to clear attendance log', 'error');
+        }
+    } catch (e) {
+        showToast(`Error clearing attendance: ${e.message}`, 'error');
+    }
+}
+
 // ─── Initialize ────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     // Start status polling
     pollStatus();
     setInterval(pollStatus, STATUS_POLL_INTERVAL);
+
+    // Start attendance polling
+    pollAttendance();
+    setInterval(pollAttendance, 3000);
 
     // Initial toast
     showToast('Dashboard connected', 'success', 2500);

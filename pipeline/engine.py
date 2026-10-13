@@ -48,6 +48,7 @@ class CameraWorker:
     """
 
     def __init__(self, camera_id, detector, preprocessor, embedder, gallery, pose_estimator,
+                 attendance_manager=None,
                  tracker_enabled=True, recognition_interval=10):
         self.camera_id = camera_id
         self.detector = detector
@@ -55,6 +56,7 @@ class CameraWorker:
         self.embedder = embedder
         self.gallery = gallery
         self.pose_estimator = pose_estimator
+        self.attendance_manager = attendance_manager
 
         # Tracker (per-camera)
         self.tracker = FaceTracker(
@@ -184,9 +186,9 @@ class CameraWorker:
                 else:
                     assignments = [(i, i, True) for i in range(len(detections))]
 
-                # ── 3. Recognition ──
+                # ── 3. Face Quality / Pose Check & Realignment ──
                 t_emb = time.perf_counter()
-                faces_to_recognize = []  # (det_idx, track_id, crop, det)
+                faces_to_recognize = []  # (det_idx, track_id, crop, det, blur_score)
 
                 h, w = frame.shape[:2]
                 for det_idx, track_id, needs_recognition in assignments:
@@ -197,9 +199,16 @@ class CameraWorker:
                         x1, y1, x2, y2 = [int(v) for v in det['bbox']]
                         crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
 
+                    if crop is not None and crop.size > 0:
+                        # Face Quality Check: Laplacian variance for sharpness
+                        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                        blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                    else:
+                        blur_score = 0.0
+
                     if needs_recognition:
                         if crop is not None and crop.size > 0:
-                            faces_to_recognize.append((det_idx, track_id, crop, det))
+                            faces_to_recognize.append((det_idx, track_id, crop, det, blur_score))
                         else:
                             results.append(RecognitionResult(
                                 bbox=bboxes[det_idx],
@@ -209,7 +218,7 @@ class CameraWorker:
                                 track_id=track_id,
                             ))
                     else:
-                        # Cached from tracker
+                        # Cached & smoothed observation from tracker
                         if self.tracker is not None:
                             track = self.tracker.get_track(track_id)
                             if track is not None:
@@ -218,16 +227,19 @@ class CameraWorker:
                                     name=track.name,
                                     confidence=getattr(track, 'confidence', 0.0),
                                     similarity=track.similarity,
+                                    pose=track.pose,
                                     track_id=track_id,
                                 ))
 
-                # Run embeddings and gallery matching
+                # ── 4. GlintR100 Embeddings & 5. Gallery Matching ──
                 if faces_to_recognize:
                     crops = [f[2] for f in faces_to_recognize]
                     embeddings = self.embedder.get_embeddings_batch(crops)
 
                     for i, embedding in enumerate(embeddings):
-                        det_idx, track_id, crop, det = faces_to_recognize[i]
+                        det_idx, track_id, crop, det, blur_score = faces_to_recognize[i]
+                        
+                        # Pose check (3D head rotation matrix)
                         det_pose = "Front"
                         if self.pose_estimator is not None:
                             det_pose, _ = self.pose_estimator.estimate_pose(
@@ -235,12 +247,33 @@ class CameraWorker:
                                 bbox=det['bbox'],
                                 face_crop=crop
                             )
-                        name, confidence, similarity, match_pose = self.gallery.identify(embedding, query_pose=det_pose)
 
-                        # Update tracker with recognized identity
+                        # Employee gallery matching
+                        raw_name, raw_conf, raw_sim, match_pose = self.gallery.identify(embedding, query_pose=det_pose)
+
+                        # ── 6. Combine Observations Across Frames ──
                         if self.tracker is not None:
-                            self.tracker.update_identity(track_id, name, similarity, confidence, match_pose)
+                            name, confidence, similarity, match_pose = self.tracker.update_identity(
+                                track_id, raw_name, raw_sim, raw_conf, match_pose, quality=blur_score
+                            )
+                            # Evaluate attendance event (duplicate suppressed)
+                            if self.attendance_manager is not None and name != "Unknown":
+                                track = self.tracker.get_track(track_id)
+                                best_obs = track.best_observation if track else None
+                                self.attendance_manager.process_observation(
+                                    track_id=track_id,
+                                    name=name,
+                                    confidence=confidence,
+                                    similarity=similarity,
+                                    pose=match_pose,
+                                    quality_score=blur_score,
+                                    camera_id=self.camera_id,
+                                    best_observation=best_obs
+                                )
+                        else:
+                            name, confidence, similarity = raw_name, raw_conf, raw_sim
 
+                        # ── 7. Identity or Unknown -> Calibrated Confidence ──
                         results.append(RecognitionResult(
                             bbox=bboxes[det_idx],
                             name=name,
@@ -302,17 +335,24 @@ class CameraWorker:
             x1, y1, x2, y2 = [int(v) for v in result.bbox]
             conf = result.confidence
 
+            # Track ID prefix and attendance status badge
+            track_prefix = f"[#{result.track_id}] " if getattr(result, 'track_id', -1) >= 0 else ""
+            is_logged = False
+            if self.attendance_manager and getattr(result, 'track_id', -1) >= 0:
+                is_logged = self.attendance_manager.is_track_logged(result.track_id)
+            att_suffix = " (Logged)" if is_logged else ""
+
             # Section 16 Color & Label Rules
             if conf >= config.CONFIDENCE_THRESHOLD_GREEN:
                 color = config.COLOR_GREEN
-                label = f"{result.name} ({conf:.0f}%)"
+                label = f"{track_prefix}{result.name} ({conf:.0f}%){att_suffix}"
             elif conf >= config.CONFIDENCE_THRESHOLD_YELLOW:
                 color = config.COLOR_YELLOW
-                label = f"{result.name} ({conf:.0f}%)"
+                label = f"{track_prefix}{result.name} ({conf:.0f}%){att_suffix}"
             else:
                 # Below 60%: NO IDENTITY LABEL
                 color = config.COLOR_UNKNOWN
-                label = "Unknown"
+                label = f"{track_prefix}Unknown"
 
             # Draw bounding box
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, config.BBOX_THICKNESS)
@@ -365,6 +405,7 @@ class RecognitionEngine:
         self.gallery = None
         self.pose_estimator = None
         self.quality_assessor = None
+        self.attendance_manager = None
         self.workers = {}  # camera_id → CameraWorker
         self.active_model_name = config.ACTIVE_MODEL
         self._initialized = False
@@ -393,6 +434,15 @@ class RecognitionEngine:
             min_face_size=config.MIN_FACE_SIZE,
             min_blur_score=config.MIN_BLUR_SCORE,
             min_detection_score=config.BLAZEFACE_CONFIDENCE_THRESHOLD
+        )
+
+        # Attendance Event Manager with Duplicate Suppression
+        from pipeline.attendance import AttendanceManager
+        self.attendance_manager = AttendanceManager(
+            log_path=getattr(config, 'ATTENDANCE_LOG_PATH', None),
+            min_confidence=getattr(config, 'ATTENDANCE_CONFIDENCE_THRESHOLD', 85.0),
+            min_stable_frames=getattr(config, 'ATTENDANCE_MIN_FRAMES', 3),
+            cooldown_seconds=getattr(config, 'ATTENDANCE_COOLDOWN_SECONDS', 300)
         )
 
         # Embedder model
@@ -650,11 +700,27 @@ class RecognitionEngine:
             embedder=self.embedder,
             gallery=self.gallery,
             pose_estimator=self.pose_estimator,
+            attendance_manager=self.attendance_manager,
             tracker_enabled=config.TRACKER_ENABLED,
             recognition_interval=config.TRACKER_RECOGNITION_INTERVAL,
         )
         self.workers[camera_id] = worker
         logger.info(f"Added camera {camera_id} to engine")
+
+    def get_attendance_events(self, limit=100):
+        if self.attendance_manager:
+            return self.attendance_manager.get_recent_events(limit=limit)
+        return []
+
+    def get_attendance_summary(self):
+        if self.attendance_manager:
+            return self.attendance_manager.get_summary()
+        return {}
+
+    def clear_attendance(self):
+        if self.attendance_manager:
+            return self.attendance_manager.clear()
+        return False
 
     def remove_camera(self, camera_id):
         if camera_id in self.workers:

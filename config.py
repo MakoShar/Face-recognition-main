@@ -120,6 +120,13 @@ TRACKER_IOU_THRESHOLD = 0.3              # Min IoU to associate tracked faces
 TRACKER_MAX_DISAPPEARED = 15              # Frames before dropping a tracked face
 TRACKER_RECOGNITION_INTERVAL = 10         # Re-run recognition every N frames
 
+# ─── Attendance & Event Suppression Settings ─────────────────────────────────
+ATTENDANCE_ENABLED = True
+ATTENDANCE_CONFIDENCE_THRESHOLD = 85.0     # Minimum confidence % to record attendance
+ATTENDANCE_MIN_FRAMES = 3                  # Minimum stable observations in track before logging
+ATTENDANCE_COOLDOWN_SECONDS = 300          # 5 minutes suppression window for duplicate check-ins
+ATTENDANCE_LOG_PATH = os.path.join(DATA_DIR, "attendance.json")
+
 # ─── Performance Settings ────────────────────────────────────────────────────
 ONNX_NUM_THREADS = 4                      # ONNX Runtime intra-op threads
 ONNX_EXECUTION_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]

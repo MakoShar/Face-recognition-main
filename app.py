@@ -244,6 +244,28 @@ def api_gallery():
     return jsonify(eng.get_gallery_info())
 
 
+@app.route('/api/attendance')
+def api_attendance():
+    """Get recorded attendance events and summary stats."""
+    eng = get_engine()
+    limit = request.args.get('limit', default=100, type=int)
+    return jsonify({
+        'events': eng.get_attendance_events(limit=limit),
+        'summary': eng.get_attendance_summary(),
+    })
+
+
+@app.route('/api/attendance/clear', methods=['POST'])
+def api_attendance_clear():
+    """Clear recorded attendance events."""
+    eng = get_engine()
+    success = eng.clear_attendance()
+    return jsonify({
+        'status': 'success' if success else 'error',
+        'message': 'Attendance log cleared' if success else 'Failed to clear attendance log'
+    })
+
+
 @app.route('/api/enroll/video', methods=['POST'])
 def api_enroll_video():
     """
