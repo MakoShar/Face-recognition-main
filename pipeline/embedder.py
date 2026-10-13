@@ -12,10 +12,43 @@ and L2-normalized 512-dimensional feature embedding vectors.
 import os
 import cv2
 import numpy as np
-import onnxruntime as ort
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def setup_cuda_environment():
+    """
+    Ensure NVIDIA CUDA and cuDNN shared libraries from pip packages
+    are registered and preloaded so ONNX Runtime CUDAExecutionProvider
+    loads cleanly without missing shared library errors on Linux.
+    """
+    import site
+    import glob
+    import ctypes
+
+    nvidia_paths = []
+    for p in site.getsitepackages() + [site.getusersitepackages()]:
+        pattern = os.path.join(p, "nvidia", "*", "lib")
+        nvidia_paths.extend(glob.glob(pattern))
+
+    for p in nvidia_paths:
+        if not os.path.isdir(p):
+            continue
+        cur_ld = os.environ.get("LD_LIBRARY_PATH", "")
+        if p not in cur_ld:
+            os.environ["LD_LIBRARY_PATH"] = f"{p}:{cur_ld}" if cur_ld else p
+        for fname in sorted(os.listdir(p)):
+            if fname.endswith(".so") or ".so." in fname:
+                try:
+                    ctypes.CDLL(os.path.join(p, fname), mode=ctypes.RTLD_GLOBAL)
+                except Exception:
+                    pass
+
+
+# Ensure CUDA/cuDNN libraries are available before initializing ONNX Runtime
+setup_cuda_environment()
+import onnxruntime as ort  # noqa: E402
 
 
 class FaceEmbedder:
@@ -29,11 +62,15 @@ class FaceEmbedder:
             model_path: Path to ONNX model file
             model_type: "glintr100", "adaface", or "auto" (inferred from path)
             num_threads: Number of ONNX Runtime intra-op threads
-            providers: Execution providers (default: CPUExecutionProvider)
+            providers: Execution providers (default: from config.ONNX_EXECUTION_PROVIDERS)
         """
         self.model_path = model_path
         if providers is None:
-            providers = ["CPUExecutionProvider"]
+            try:
+                import config
+                providers = config.ONNX_EXECUTION_PROVIDERS
+            except Exception:
+                providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
         # Infer model type
         if model_type == "auto":
@@ -67,7 +104,7 @@ class FaceEmbedder:
             f"FaceEmbedder initialized: type={self.model_type}, "
             f"input={self.input_name} {self.input_shape}, "
             f"output={self.output_name} dim={self.embedding_dim}, "
-            f"providers={providers}"
+            f"active_providers={self.session.get_providers()}"
         )
 
     def preprocess_face_crop(self, face_bgr, target_size=112):

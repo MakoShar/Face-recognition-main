@@ -1,0 +1,57 @@
+{
+  "GlintR100 (ResNet100)": {
+    "model_size_mb": 248.59,
+    "load_time_sec": 0.526,
+    "latency_ms_avg": 11.44,
+    "latency_ms_std": 0.42,
+    "throughput_fps": 87.44,
+    "enrolled_identities": 7,
+    "total_reference_samples": 105,
+    "active_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "cross_pose_cosine_sim": {
+      "Front_vs_Left": 0.123,
+      "Front_vs_Right": 0.3042,
+      "Front_vs_Up": 0.1789,
+      "Front_vs_Down": 0.42
+    },
+    "cross_pose_confidence": {
+      "Front_vs_Left": 24.6,
+      "Front_vs_Right": 53.1,
+      "Front_vs_Up": 34.3,
+      "Front_vs_Down": 74.0
+    },
+    "impostor_cosine_sim": {
+      "Anoop_vs_Devanshu Pal": 0.2447,
+      "Anoop_vs_Nihal": 0.1779,
+      "Anoop_vs_Nirvighna": 0.0742,
+      "Anoop_vs_Swetab Tripathy": 0.2118,
+      "Anoop_vs_Vipul Jat": 0.1511,
+      "Anoop_vs_Yash Jain": 0.1901
+    },
+    "max_impostor_sim": 0.2447,
+    "false_acceptance_at_threshold_60": "0.0% (Zero false accepts)",
+    "test_image_results": []
+  },
+  "AdaFace (IR-101)": {
+    "model_size_mb": 248.61,
+    "load_time_sec": 0.327,
+    "latency_ms_avg": 11.06,
+    "latency_ms_std": 0.12,
+    "throughput_fps": 90.39,
+    "enrolled_identities": 1,
+    "total_reference_samples": 15,
+    "active_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "cross_pose_cosine_sim": {},
+    "cross_pose_confidence": {},
+    "impostor_cosine_sim": {},
+    "max_impostor_sim": 0.0,
+    "false_acceptance_at_threshold_60": "0.0% (Zero false accepts)",
+    "test_image_results": []
+  }
+}

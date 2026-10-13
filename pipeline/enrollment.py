@@ -11,6 +11,8 @@ import numpy as np
 import logging
 import os
 
+from pipeline.preprocessor import FacePreprocessor
+
 logger = logging.getLogger(__name__)
 
 REQUIRED_POSES = ["Front", "Left", "Right", "Up", "Down"]
@@ -42,7 +44,8 @@ class VideoEnrollmentManager:
                            detector,
                            embedder,
                            pose_estimator,
-                           quality_assessor):
+                           quality_assessor,
+                           preprocessor=None):
         """
         Process an enrollment video and register reference embeddings.
 
@@ -54,10 +57,13 @@ class VideoEnrollmentManager:
             embedder: FaceEmbedder instance
             pose_estimator: HeadPoseEstimator instance
             quality_assessor: FaceQualityAssessor instance
+            preprocessor: FacePreprocessor instance (optional)
 
         Returns:
             report: Dictionary summarizing enrollment results
         """
+        if preprocessor is None:
+            preprocessor = FacePreprocessor()
         if not os.path.exists(video_path):
             return {
                 "success": False,
@@ -124,15 +130,22 @@ class VideoEnrollmentManager:
                 continue
 
             # 3. Pose estimation
-            pose, metrics = pose_estimator.estimate_pose(keypoints, bbox)
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            h, w = frame.shape[:2]
+            raw_crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+            pose, metrics = pose_estimator.estimate_pose(keypoints=keypoints, bbox=bbox, face_crop=raw_crop)
             if pose not in REQUIRED_POSES:
                 continue
 
-            # Extract crop
-            x1, y1, x2, y2 = [int(v) for v in bbox]
-            h, w = frame.shape[:2]
-            crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
-            if crop.size == 0:
+            # Extract aligned crop
+            if preprocessor is not None:
+                crop = preprocessor.align_face(frame, keypoints, bbox)
+            else:
+                x1, y1, x2, y2 = [int(v) for v in bbox]
+                h, w = frame.shape[:2]
+                crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+
+            if crop is None or crop.size == 0:
                 continue
 
             # 4. Extract embedding

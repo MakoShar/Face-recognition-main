@@ -96,6 +96,8 @@ def index():
         'dashboard.html',
         camera_ids=camera_ids,
         gallery_info=gallery_info,
+        available_models=config.AVAILABLE_MODELS,
+        active_model=eng.active_model_name,
     )
 
 
@@ -140,12 +142,53 @@ def video_feed(camera_id):
 
 @app.route('/api/status')
 def api_status():
-    """Get status of all cameras and the gallery."""
+    """Get status of all cameras, gallery, and system hardware metrics."""
     eng = get_engine()
+
+    # System & Process RAM
+    import psutil
+    vm = psutil.virtual_memory()
+    proc = psutil.Process()
+    ram_info = {
+        'percent': round(vm.percent, 1),
+        'used_gb': round(vm.used / (1024**3), 2),
+        'total_gb': round(vm.total / (1024**3), 2),
+        'available_gb': round(vm.available / (1024**3), 2),
+        'process_mb': round(proc.memory_info().rss / (1024**2), 1),
+    }
+
+    # GPU VRAM & Utilization
+    gpu_info = {
+        'available': False,
+        'model': 'NVIDIA GeForce RTX 3050',
+        'used_mb': 0,
+        'total_mb': 4096,
+        'percent': 0.0,
+        'util_percent': 0.0,
+    }
+    try:
+        import subprocess
+        res = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.used,memory.total,utilization.gpu', '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=0.5
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            parts = [float(x.strip()) for x in res.stdout.strip().split(',')]
+            gpu_info['available'] = True
+            gpu_info['used_mb'] = round(parts[0], 0)
+            gpu_info['total_mb'] = round(parts[1], 0)
+            gpu_info['percent'] = round((parts[0] / parts[1]) * 100, 1)
+            gpu_info['util_percent'] = round(parts[2], 0)
+    except Exception:
+        pass
 
     return jsonify({
         'cameras': eng.get_all_status(),
         'gallery': eng.get_gallery_info(),
+        'system': {
+            'ram': ram_info,
+            'gpu': gpu_info,
+        },
         'timestamp': time.time(),
     })
 
@@ -220,13 +263,15 @@ def api_enroll_video():
         abort(400, description="No file selected")
 
     import tempfile
-    from werkzeug.utils import secure_filename
+    import uuid
     from pipeline.enrollment import VideoEnrollmentManager
 
-    safe_name = secure_filename(video_file.filename) or "enrollment.mp4"
-    with tempfile.NamedTemporaryFile(suffix=os.path.splitext(safe_name)[1], delete=False) as tmp:
-        tmp_path = tmp.name
-        video_file.save(tmp_path)
+    tmp_dir = tempfile.gettempdir()
+    _, ext = os.path.splitext(video_file.filename)
+    if not ext:
+        ext = ".mp4"
+    tmp_path = os.path.join(tmp_dir, f"enroll_{uuid.uuid4().hex}{ext}")
+    video_file.save(tmp_path)
 
     try:
         eng = get_engine()
@@ -246,25 +291,34 @@ def api_enroll_video():
         # Save updated gallery
         eng.gallery.save(config.GALLERY_EMBEDDINGS_PATH)
         return jsonify(report)
+    except Exception as e:
+        logger.exception(f"Video enrollment failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
     finally:
         if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 @app.route('/api/model/switch', methods=['POST'])
 def api_model_switch():
-    """Switch active embedding model between glintr100 and adaface."""
+    """Switch active embedding model: stops running model first, then starts selected model."""
     data = request.get_json(silent=True) or {}
     model_name = data.get('model', '').lower()
-    if model_name not in ['glintr100', 'adaface']:
-        abort(400, description="Invalid model name. Must be 'glintr100' or 'adaface'")
+    if model_name not in config.AVAILABLE_MODELS:
+        abort(400, description=f"Invalid model name '{model_name}'. Available: {list(config.AVAILABLE_MODELS.keys())}")
 
     eng = get_engine()
     try:
-        eng.switch_model(model_name)
+        switch_res = eng.switch_model(model_name)
         return jsonify({
             'status': 'success',
-            'active_model': eng.active_model_name,
+            'message': switch_res['message'],
+            'previous_model': switch_res['previous_model'],
+            'active_model': switch_res['active_model'],
+            'active_model_name': switch_res['name'],
             'gallery': eng.get_gallery_info()
         })
     except Exception as e:
@@ -274,12 +328,120 @@ def api_model_switch():
 
 @app.route('/api/model/active')
 def api_model_active():
-    """Get active embedding model name."""
+    """Get active embedding model name and all available models."""
     eng = get_engine()
     return jsonify({
         'active_model': eng.active_model_name,
-        'available_models': ['glintr100', 'adaface']
+        'active_model_name': config.AVAILABLE_MODELS.get(eng.active_model_name, {}).get('name', eng.active_model_name),
+        'available_models': config.AVAILABLE_MODELS
     })
+
+
+# ─── Training State & Endpoints ──────────────────────────────────────────────
+training_state = {
+    'status': 'idle',  # 'idle', 'running', 'completed', 'error'
+    'model': None,
+    'model_display': None,
+    'progress_percent': 0,
+    'current_video': '',
+    'current_index': 0,
+    'total_videos': 0,
+    'message': 'Ready to train',
+    'logs': [],
+    'result': None,
+    'started_at': 0,
+    'finished_at': 0,
+}
+training_lock = threading.Lock()
+
+
+@app.route('/api/train', methods=['POST'])
+def api_train():
+    """
+    Trigger training / enrollment on all videos in data/raw_videos for a specific model.
+    Saves the embeddings separately into gallery/embeddings_<model>.json.
+    """
+    global training_state
+
+    with training_lock:
+        if training_state['status'] == 'running':
+            return jsonify({
+                'status': 'already_running',
+                'message': f"Training is already running for {training_state.get('model_display', 'a model')}",
+                'state': training_state
+            }), 409
+
+        data = request.get_json(silent=True) or {}
+        eng = get_engine()
+        target_model = data.get('model', '').lower() or eng.active_model_name
+
+        if target_model not in config.AVAILABLE_MODELS:
+            abort(400, description=f"Invalid model '{target_model}'. Available: {list(config.AVAILABLE_MODELS.keys())}")
+
+        model_cfg = config.AVAILABLE_MODELS[target_model]
+        training_state = {
+            'status': 'running',
+            'model': target_model,
+            'model_display': model_cfg['name'],
+            'progress_percent': 0,
+            'current_video': '',
+            'current_index': 0,
+            'total_videos': 0,
+            'message': f"Starting training for {model_cfg['name']}...",
+            'logs': [f"[{time.strftime('%H:%M:%S')}] Initialized training for {model_cfg['name']} on {config.GALLERY_VIDEOS_DIR}"],
+            'result': None,
+            'started_at': time.time(),
+            'finished_at': 0,
+        }
+
+    def train_worker(model_name):
+        global training_state
+        try:
+            def on_progress(idx, total, filename, name, st, details):
+                with training_lock:
+                    pct = int((idx / max(1, total)) * 100) if total > 0 else 0
+                    training_state['progress_percent'] = pct
+                    training_state['current_index'] = idx
+                    training_state['total_videos'] = total
+                    training_state['current_video'] = filename
+                    training_state['message'] = f"[{idx}/{total}] {name}: {details}"
+                    log_line = f"[{time.strftime('%H:%M:%S')}] ({idx}/{total}) {name} - {details}"
+                    training_state['logs'].append(log_line)
+                    if len(training_state['logs']) > 100:
+                        training_state['logs'] = training_state['logs'][-100:]
+
+            res = eng.train_model(model_name=model_name, progress_callback=on_progress)
+            with training_lock:
+                training_state['status'] = 'completed'
+                training_state['progress_percent'] = 100
+                training_state['finished_at'] = time.time()
+                training_state['result'] = res
+                training_state['message'] = f"Training completed: {res['identities_enrolled']} identities ({res['total_embeddings']} refs) saved to {os.path.basename(res['cache_file'])}"
+                training_state['logs'].append(f"[{time.strftime('%H:%M:%S')}] ✓ {training_state['message']}")
+        except Exception as e:
+            logger.exception(f"Background training error: {e}")
+            with training_lock:
+                training_state['status'] = 'error'
+                training_state['finished_at'] = time.time()
+                training_state['message'] = f"Training failed: {str(e)}"
+                training_state['logs'].append(f"[{time.strftime('%H:%M:%S')}] ✗ Error: {str(e)}")
+
+    t = threading.Thread(target=train_worker, args=(target_model,), daemon=True)
+    t.start()
+
+    return jsonify({
+        'status': 'started',
+        'message': f"Training started for {model_cfg['name']}",
+        'model': target_model,
+        'model_display': model_cfg['name']
+    })
+
+
+@app.route('/api/train/status')
+def api_train_status():
+    """Get the live status of the training worker."""
+    with training_lock:
+        return jsonify(training_state)
 
 
 # ─── Error Handlers ──────────────────────────────────────────────────────────

@@ -101,7 +101,7 @@ async function reEnroll() {
                 list.innerHTML = `
                     <div class="gallery-empty">
                         <p>No identities enrolled.</p>
-                        <p class="text-muted">Add face images to <code>Ppl/Images/</code></p>
+                        <p class="text-muted">Add face videos to <code>data/raw_videos/</code></p>
                     </div>
                 `;
             }
@@ -223,32 +223,119 @@ async function pollStatus() {
                     const m = status.metrics;
 
                     const detEl = document.getElementById(`det-time-${camId}`);
-                    if (detEl) detEl.textContent = `${m.avg_detection_ms.toFixed(1)} ms`;
+                    if (detEl) detEl.textContent = `${(m.latest_detection_ms || m.avg_detection_ms || 0).toFixed(1)} ms`;
 
                     const embEl = document.getElementById(`emb-time-${camId}`);
-                    if (embEl) embEl.textContent = `${m.avg_embedding_ms.toFixed(1)} ms`;
+                    if (embEl) embEl.textContent = `${(m.latest_embedding_ms || m.avg_embedding_ms || 0).toFixed(1)} ms`;
 
-                    const faceEl = document.getElementById(`face-count-${camId}`);
-                    if (faceEl) faceEl.textContent = m.faces_detected;
+                    const totEl = document.getElementById(`total-time-${camId}`);
+                    if (totEl) totEl.textContent = `${(m.latest_total_ms || m.avg_total_ms || 0).toFixed(1)} ms`;
+
+                    const inFrameEl = document.getElementById(`faces-in-frame-cam-${camId}`);
+                    const facesInFrame = m.faces_in_frame !== undefined ? m.faces_in_frame : 0;
+                    if (inFrameEl) {
+                        inFrameEl.textContent = `${facesInFrame} face${facesInFrame === 1 ? '' : 's'}`;
+                        if (facesInFrame > 0) {
+                            inFrameEl.classList.add('has-faces');
+                        } else {
+                            inFrameEl.classList.remove('has-faces');
+                        }
+                    }
+
+                    // HUD elements on live video
+                    const hudFaces = document.getElementById(`hud-faces-${camId}`);
+                    if (hudFaces) hudFaces.textContent = facesInFrame;
+
+                    const hudLatency = document.getElementById(`hud-latency-${camId}`);
+                    if (hudLatency) hudLatency.textContent = (m.latest_total_ms || m.avg_total_ms || 0).toFixed(0);
 
                     totalFrames += m.frames_processed;
-                    totalLatency += m.avg_total_ms;
+                    totalLatency += (m.latest_total_ms || m.avg_total_ms || 0);
                     cameraCount++;
                 }
             }
         }
 
-        // Update global stats
+        // Live faces in frame across all cameras
+        let totalLiveFaces = 0;
+        if (data.cameras) {
+            for (const status of Object.values(data.cameras)) {
+                if (status.metrics && status.metrics.faces_in_frame) {
+                    totalLiveFaces += status.metrics.faces_in_frame;
+                }
+            }
+        }
+
+        const facesValEl = document.getElementById('faces-in-frame-val');
+        if (facesValEl) facesValEl.textContent = totalLiveFaces;
+
+        const facesBadgeEl = document.getElementById('faces-in-frame-badge');
+        if (facesBadgeEl) {
+            if (totalLiveFaces > 0) {
+                facesBadgeEl.className = 'badge badge-live badge-detected';
+                facesBadgeEl.innerHTML = `<span class="pulse-dot active"></span> ${totalLiveFaces} DETECTED`;
+            } else {
+                facesBadgeEl.className = 'badge badge-live';
+                facesBadgeEl.innerHTML = `<span class="pulse-dot"></span> SCANNING`;
+            }
+        }
+
+        // Update global latency
         const latencyEl = document.getElementById('avg-latency');
         if (latencyEl && cameraCount > 0) {
             latencyEl.textContent = (totalLatency / cameraCount).toFixed(0);
         }
 
-        const framesEl = document.getElementById('frames-processed');
-        if (framesEl) framesEl.textContent = totalFrames.toLocaleString();
+        // Global latency breakdown
+        let avgDet = 0;
+        let avgEmb = 0;
+        if (data.cameras && cameraCount > 0) {
+            for (const status of Object.values(data.cameras)) {
+                if (status.metrics) {
+                    avgDet += (status.metrics.latest_detection_ms || status.metrics.avg_detection_ms || 0);
+                    avgEmb += (status.metrics.latest_embedding_ms || status.metrics.avg_embedding_ms || 0);
+                }
+            }
+            avgDet = avgDet / cameraCount;
+            avgEmb = avgEmb / cameraCount;
+            const breakdownEl = document.getElementById('latency-breakdown');
+            if (breakdownEl) {
+                breakdownEl.textContent = `Det: ${avgDet.toFixed(1)}ms | Emb: ${avgEmb.toFixed(1)}ms (GPU)`;
+            }
+        }
 
-        const camerasEl = document.getElementById('active-cameras');
-        if (camerasEl) camerasEl.textContent = Object.keys(data.cameras || {}).length;
+        // Update RAM and System metrics
+        if (data.system && data.system.ram) {
+            const ram = data.system.ram;
+            const ramPctEl = document.getElementById('ram-percent');
+            if (ramPctEl) ramPctEl.textContent = `${ram.percent}%`;
+
+            const ramDetEl = document.getElementById('ram-details');
+            if (ramDetEl) ramDetEl.textContent = `${ram.used_gb} / ${ram.total_gb} GB`;
+        }
+
+        // Update GPU metrics & Camera HUD
+        if (data.system && data.system.gpu && data.system.gpu.available) {
+            const gpu = data.system.gpu;
+
+            // Top metric card: GPU Compute % + VRAM
+            const gpuUtilEl = document.getElementById('gpu-util');
+            if (gpuUtilEl) gpuUtilEl.textContent = `${gpu.util_percent.toFixed(0)}%`;
+
+            const gpuBadgeEl = document.getElementById('gpu-badge');
+            if (gpuBadgeEl) gpuBadgeEl.textContent = `${gpu.used_mb} MB (${gpu.percent}%)`;
+
+            // Update Camera HUD overlay with GPU Compute % and VRAM
+            if (data.cameras) {
+                for (const camId of Object.keys(data.cameras)) {
+                    const hudGpu = document.getElementById(`hud-gpu-${camId}`);
+                    if (hudGpu) hudGpu.textContent = `${gpu.util_percent.toFixed(0)}`;
+
+                    const hudVram = document.getElementById(`hud-vram-${camId}`);
+                    if (hudVram) hudVram.textContent = `${gpu.used_mb.toFixed(0)}`;
+                }
+            }
+        }
 
         // Gallery info
         if (data.gallery) {
@@ -257,33 +344,67 @@ async function pollStatus() {
         }
 
     } catch (error) {
-        // Silently ignore polling errors
         console.debug('Status poll failed:', error);
     }
 }
 
 // ─── Model Switching ──────────────────────────────────────────────
+let currentActiveModel = document.getElementById('model-select')?.value || 'glintr100';
+
 async function switchModel(modelName) {
-    showToast(`Switching to model ${modelName.toUpperCase()}...`, 'info');
+    const selectEl = document.getElementById('model-select');
+    const selectedOption = selectEl?.options[selectEl.selectedIndex];
+    const newModelTitle = selectedOption ? selectedOption.text : modelName.toUpperCase();
+
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-model-name');
+
+    // 1. Give clear message that current model is stopping and new model is starting
+    showToast(`Stopping current model and starting ${newModelTitle}...`, 'info', 5000);
+
+    if (selectEl) selectEl.disabled = true;
+    if (statusDot) statusDot.className = 'status-dot switching';
+    if (statusText) statusText.textContent = `Starting ${newModelTitle}...`;
+
     try {
         const response = await fetch('/api/model/switch', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({model: modelName})
         });
+
         const data = await response.json();
-        if (data.status === 'success') {
-            showToast(`Active model is now ${modelName.toUpperCase()}`, 'success');
-            const statusEl = document.getElementById('status-model-name');
-            if (statusEl) statusEl.textContent = `${modelName.toUpperCase()} Active`;
+
+        if (response.ok && data.status === 'success') {
+            currentActiveModel = data.active_model;
+            showToast(data.message || `Started ${data.active_model_name} successfully!`, 'success', 5000);
+
+            if (statusDot) statusDot.className = 'status-dot active';
+            if (statusText) statusText.textContent = `${(data.active_model_name || modelName).toUpperCase()} Active`;
+
             const footerEl = document.getElementById('footer-active-model');
-            if (footerEl) footerEl.textContent = modelName.toUpperCase();
+            if (footerEl) footerEl.textContent = data.active_model_name || modelName.toUpperCase();
+
+            // Refresh camera feeds to reconnect cleanly with the new model
+            setTimeout(() => {
+                const feeds = document.querySelectorAll('.camera-feed');
+                feeds.forEach(feed => {
+                    const srcBase = feed.src.split('?')[0];
+                    feed.src = `${srcBase}?t=${Date.now()}`;
+                });
+            }, 600);
+
             pollStatus();
         } else {
-            showToast(`Model switch failed: ${data.message || 'Error'}`, 'error');
+            throw new Error(data.message || data.error || 'Server error occurred');
         }
     } catch (err) {
-        showToast(`Model switch error: ${err.message}`, 'error');
+        showToast(`Model switch failed: ${err.message}`, 'error', 6000);
+        if (selectEl) selectEl.value = currentActiveModel;
+        if (statusDot) statusDot.className = 'status-dot active';
+        if (statusText) statusText.textContent = `${currentActiveModel.toUpperCase()} Active`;
+    } finally {
+        if (selectEl) selectEl.disabled = false;
     }
 }
 
@@ -341,6 +462,207 @@ async function handleVideoEnroll(e) {
         btn.disabled = false;
         btn.textContent = 'Enroll Identity';
     }
+}
+
+// ─── Training Modal & Runner ───────────────────────────────────────
+let trainPollTimer = null;
+
+function openTrainModal() {
+    const modal = document.getElementById('train-modal');
+    if (modal) {
+        modal.style.display = 'flex';
+        // Sync model dropdown with active model
+        const select = document.getElementById('train-model-select');
+        if (select && currentActiveModel) {
+            select.value = currentActiveModel;
+        }
+        checkTrainingStatus();
+    }
+}
+
+function closeTrainModal() {
+    const modal = document.getElementById('train-modal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+function handleModalBackdropClick(e) {
+    if (e.target && e.target.id === 'train-modal') {
+        closeTrainModal();
+    }
+}
+
+async function startTraining() {
+    const modelSelect = document.getElementById('train-model-select');
+    const startBtn = document.getElementById('btn-start-training');
+    const progressSection = document.getElementById('train-progress-section');
+    const logContainer = document.getElementById('train-log-container');
+    const resultAlert = document.getElementById('train-result-alert');
+    const progressBar = document.getElementById('train-progress-bar');
+    const percentLabel = document.getElementById('train-percent');
+    const stepText = document.getElementById('train-step-text');
+    const logBox = document.getElementById('train-log-box');
+
+    const targetModel = modelSelect ? modelSelect.value : currentActiveModel;
+
+    if (startBtn) {
+        startBtn.disabled = true;
+        startBtn.innerHTML = '<span class="step-spinner"></span> Starting...';
+    }
+
+    if (progressSection) progressSection.style.display = 'flex';
+    if (logContainer) logContainer.style.display = 'flex';
+    if (resultAlert) resultAlert.style.display = 'none';
+    if (progressBar) progressBar.style.width = '0%';
+    if (percentLabel) percentLabel.textContent = '0%';
+    if (stepText) stepText.textContent = `Initializing training for ${targetModel.toUpperCase()}...`;
+    if (logBox) logBox.innerHTML = `<div style="color:#a5b4fc;">Initializing training on data/raw_videos...</div>`;
+
+    try {
+        const response = await fetch('/api/train', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: targetModel })
+        });
+        const data = await response.json();
+
+        if (!response.ok && data.status !== 'already_running') {
+            throw new Error(data.error || data.message || 'Failed to start training');
+        }
+
+        showToast(`Training started for ${data.model_display || targetModel}`, 'info');
+
+        // Start polling progress
+        if (trainPollTimer) clearInterval(trainPollTimer);
+        trainPollTimer = setInterval(pollTrainingProgress, 800);
+    } catch (err) {
+        showToast(`Training error: ${err.message}`, 'error');
+        if (resultAlert) {
+            resultAlert.className = 'train-result-alert error';
+            resultAlert.style.display = 'block';
+            resultAlert.textContent = `Failed to start training: ${err.message}`;
+        }
+        if (startBtn) {
+            startBtn.disabled = false;
+            startBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> Start Training';
+        }
+    }
+}
+
+async function pollTrainingProgress() {
+    try {
+        const response = await fetch('/api/train/status');
+        if (!response.ok) return;
+        const state = await response.json();
+
+        const progressBar = document.getElementById('train-progress-bar');
+        const percentLabel = document.getElementById('train-percent');
+        const stepText = document.getElementById('train-step-text');
+        const logBox = document.getElementById('train-log-box');
+        const resultAlert = document.getElementById('train-result-alert');
+        const startBtn = document.getElementById('btn-start-training');
+        const progressSection = document.getElementById('train-progress-section');
+        const logContainer = document.getElementById('train-log-container');
+
+        if (state.status === 'running') {
+            if (progressSection) progressSection.style.display = 'flex';
+            if (logContainer) logContainer.style.display = 'flex';
+            if (progressBar) progressBar.style.width = `${state.progress_percent || 0}%`;
+            if (percentLabel) percentLabel.textContent = `${state.progress_percent || 0}%`;
+            if (stepText) stepText.textContent = state.message || 'Processing...';
+
+            if (startBtn) {
+                startBtn.disabled = true;
+                startBtn.innerHTML = '<span class="step-spinner"></span> Training...';
+            }
+        }
+
+        // Render logs
+        if (logBox && Array.isArray(state.logs)) {
+            logBox.innerHTML = state.logs
+                .map(l => {
+                    let color = '#94a3b8';
+                    if (l.includes('✓')) color = '#48c78e';
+                    else if (l.includes('✗') || l.includes('Error')) color = '#e74c6f';
+                    else if (l.includes('Processing')) color = '#38bdf8';
+                    return `<div style="color:${color};">${escapeHtml(l)}</div>`;
+                })
+                .join('');
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        if (state.status === 'completed') {
+            clearInterval(trainPollTimer);
+            trainPollTimer = null;
+
+            if (progressBar) progressBar.style.width = '100%';
+            if (percentLabel) percentLabel.textContent = '100%';
+            if (stepText) stepText.textContent = state.message;
+
+            if (resultAlert) {
+                resultAlert.className = 'train-result-alert success';
+                resultAlert.style.display = 'block';
+                resultAlert.innerHTML = `
+                    <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 4px;">✓ Training Successfully Completed!</div>
+                    <div>Model: <strong>${escapeHtml(state.model_display || state.model)}</strong></div>
+                    <div>Identities Enrolled: <strong>${state.result?.identities_enrolled || 0}</strong> &bull; Total Reference Vectors: <strong>${state.result?.total_embeddings || 0}</strong></div>
+                    <div style="font-size:0.8rem; opacity:0.85; margin-top:4px;">Embeddings saved to: <code>${escapeHtml(state.result?.cache_file || '')}</code></div>
+                `;
+            }
+
+            if (startBtn) {
+                startBtn.disabled = false;
+                startBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> Train Again';
+            }
+
+            showToast('Training complete! Gallery updated.', 'success');
+            // Refresh dashboard gallery
+            pollStatus();
+        } else if (state.status === 'error') {
+            clearInterval(trainPollTimer);
+            trainPollTimer = null;
+
+            if (resultAlert) {
+                resultAlert.className = 'train-result-alert error';
+                resultAlert.style.display = 'block';
+                resultAlert.textContent = state.message || 'Training failed with an unexpected error.';
+            }
+
+            if (startBtn) {
+                startBtn.disabled = false;
+                startBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> Retry Training';
+            }
+            showToast('Training encountered an error', 'error');
+        }
+    } catch (e) {
+        console.error('Failed to poll training progress:', e);
+    }
+}
+
+async function checkTrainingStatus() {
+    try {
+        const response = await fetch('/api/train/status');
+        if (!response.ok) return;
+        const state = await response.json();
+        if (state.status === 'running') {
+            if (trainPollTimer) clearInterval(trainPollTimer);
+            trainPollTimer = setInterval(pollTrainingProgress, 800);
+            pollTrainingProgress();
+        }
+    } catch (e) {
+        // ignore
+    }
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 // ─── Initialize ────────────────────────────────────────────────────

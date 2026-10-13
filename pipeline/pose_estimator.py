@@ -7,8 +7,10 @@ to estimate head pose (Front, Left, Right, Up, Down) and assesses face quality.
 """
 
 import cv2
+import math
 import numpy as np
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +20,7 @@ POSE_CATEGORIES = ["Front", "Left", "Right", "Up", "Down"]
 
 class HeadPoseEstimator:
     """
-    Estimates 3D-relative head pose from 2D facial keypoints.
+    Estimates 3D-relative head pose from 2D facial keypoints or ResNet-50 6D rotation matrix.
 
     Keypoints provided by BlazeFace (in image pixel space):
       0: Right Eye (viewer left)
@@ -30,31 +32,107 @@ class HeadPoseEstimator:
     """
 
     def __init__(self,
+                 model_path=None,
                  yaw_threshold=0.32,
                  pitch_threshold=0.28,
-                 max_roll_threshold=60.0):
+                 max_roll_threshold=60.0,
+                 yaw_threshold_deg=20.0,
+                 pitch_threshold_deg=15.0):
         """
         Args:
-            yaw_threshold: threshold for Left/Right classification
-            pitch_threshold: threshold for Up/Down classification
+            model_path: Optional path to ResNet-50 6D rotation matrix ONNX model
+            yaw_threshold: geometric threshold for Left/Right classification
+            pitch_threshold: geometric threshold for Up/Down classification
             max_roll_threshold: maximum allowable in-plane tilt angle in degrees
+            yaw_threshold_deg: neural threshold in degrees for Left/Right
+            pitch_threshold_deg: neural threshold in degrees for Up/Down
         """
+        self.model_path = model_path
         self.yaw_threshold = yaw_threshold
         self.pitch_threshold = pitch_threshold
         self.max_roll_threshold = max_roll_threshold
+        self.yaw_threshold_deg = yaw_threshold_deg
+        self.pitch_threshold_deg = pitch_threshold_deg
+        self.session = None
 
-    def estimate_pose(self, keypoints, bbox=None):
+        if model_path and os.path.exists(model_path):
+            try:
+                import onnxruntime as ort
+                sess_opts = ort.SessionOptions()
+                sess_opts.intra_op_num_threads = 2
+                sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+                self.session = ort.InferenceSession(model_path, sess_options=sess_opts, providers=providers)
+                logger.info(f"HeadPoseEstimator initialized with ResNet-50 model from {model_path} ({self.session.get_providers()})")
+            except Exception as e:
+                logger.warning(f"Could not load ONNX head pose model from {model_path}: {e}")
+
+    def estimate_pose(self, keypoints=None, bbox=None, frame=None, face_crop=None):
         """
         Classify head pose into Front, Left, Right, Up, Down.
 
         Args:
-            keypoints: List of 6 (x, y) tuples in pixel space.
+            keypoints: Optional list of 6 (x, y) tuples in pixel space.
             bbox: Optional [x1, y1, x2, y2] bounding box.
+            frame: Optional full frame BGR image.
+            face_crop: Optional cropped face BGR image.
 
         Returns:
             pose: One of "Front", "Left", "Right", "Up", "Down", or "Uncertain"
             metrics: Dict with computed ratios and angles
         """
+        # 1. Neural 3D Head Pose estimation (ResNet-50 6D rotation matrix)
+        if self.session is not None:
+            crop = face_crop
+            if crop is None and frame is not None and bbox is not None:
+                h, w = frame.shape[:2]
+                x1, y1, x2, y2 = [int(v) for v in bbox]
+                crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+
+            if crop is not None and crop.size > 0:
+                try:
+                    face_resized = cv2.resize(crop, (224, 224), interpolation=cv2.INTER_LINEAR)
+                    face_rgb = cv2.cvtColor(face_resized, cv2.COLOR_BGR2RGB)
+                    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+                    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+                    norm = (face_rgb.astype(np.float32) / 255.0 - mean) / std
+                    tensor = np.transpose(norm, (2, 0, 1))[np.newaxis, ...].astype(np.float32)
+                    out = self.session.run(None, {"input": tensor})
+                    R = out[0][0]
+
+                    sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+                    if sy > 1e-6:
+                        pitch = math.degrees(math.atan2(R[2, 1], R[2, 2]))
+                        yaw = math.degrees(math.atan2(-R[2, 0], sy))
+                        roll = math.degrees(math.atan2(R[1, 0], R[0, 0]))
+                    else:
+                        pitch = math.degrees(math.atan2(-R[1, 2], R[1, 1]))
+                        yaw = math.degrees(math.atan2(-R[2, 0], sy))
+                        roll = 0.0
+
+                    # 5-class categorization
+                    if abs(yaw) >= self.yaw_threshold_deg:
+                        pose = "Left" if yaw < 0 else "Right"
+                    elif abs(pitch) >= self.pitch_threshold_deg:
+                        pose = "Up" if pitch < 0 else "Down"
+                    else:
+                        pose = "Front"
+
+                    metrics = {
+                        "pitch_deg": pitch,
+                        "yaw_deg": yaw,
+                        "roll_deg": roll,
+                        "method": "neural_resnet50"
+                    }
+                    return pose, metrics
+                except Exception as e:
+                    logger.debug(f"Neural pose estimation failed, falling back to geometric: {e}")
+
+        # 2. Geometric fallback
+        return self._estimate_pose_geometric(keypoints, bbox)
+
+    def _estimate_pose_geometric(self, keypoints, bbox=None):
+        """Geometric fallback estimation from 2D keypoints."""
         if not keypoints or len(keypoints) < 6:
             return "Uncertain", {"error": "Insufficient keypoints"}
 
@@ -71,19 +149,16 @@ class HeadPoseEstimator:
         roll_deg = float(np.degrees(np.arctan2(dy_eyes, dx_eyes)))
 
         # 2. Yaw (horizontal asymmetry)
-        # Distance from nose to right eye vs nose to left eye
         dx_right_eye = nose[0] - re[0]
         dx_left_eye = le[0] - nose[0]
         denom_yaw = abs(dx_right_eye) + abs(dx_left_eye) + 1e-6
         yaw_ratio = float((dx_right_eye - dx_left_eye) / denom_yaw)
 
-        # Distance from ears to eyes provides additional lateral support
         dx_rear = re[0] - rear[0]
         dx_lear = lear[0] - le[0]
         denom_ear = abs(dx_rear) + abs(dx_lear) + 1e-6
         ear_ratio = float((dx_rear - dx_lear) / denom_ear)
 
-        # Combined yaw score (primary eye-nose with ear confirmation)
         yaw_score = 0.7 * yaw_ratio + 0.3 * ear_ratio
 
         # 3. Pitch (vertical asymmetry)
@@ -99,19 +174,15 @@ class HeadPoseEstimator:
             "ear_ratio": ear_ratio,
             "pitch_score": pitch_score,
             "roll_deg": roll_deg,
+            "method": "geometric_landmarks"
         }
 
-        # Check excessive roll
         if abs(roll_deg) > self.max_roll_threshold:
             return "Uncertain", metrics
 
-        # Pose classification
-        # Left vs Right has priority if lateral rotation is significant
         if abs(yaw_score) >= self.yaw_threshold:
-            # Note: in mirror/camera view, negative yaw_score means subject facing Left (viewer right/subject left)
             pose = "Left" if yaw_score < 0 else "Right"
         elif abs(pitch_score) >= self.pitch_threshold:
-            # Negative pitch_score indicates nose is closer to eye line (looking Up)
             pose = "Up" if pitch_score < 0 else "Down"
         else:
             pose = "Front"

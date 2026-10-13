@@ -150,9 +150,16 @@ class FaceGallery:
         logger.info(f"Enrolled '{name}' [{pose}]: {len(person['references'])} total reference(s)")
         return True
 
-    def identify(self, query_embedding):
+    def identify(self, query_embedding, query_pose=None):
         """
         Match a query embedding against the gallery.
+        If query_pose is specified, applies pose-filtered matching:
+        compares against templates matching that specific pose
+        (e.g. Front vs Front, Up vs Up) to prevent cross-angle impostor contamination.
+
+        Args:
+            query_embedding: (512,) float32 vector
+            query_pose: Optional pose string ("Front", "Left", "Right", "Up", "Down")
 
         Returns:
             name: Person name or "Unknown"
@@ -165,19 +172,43 @@ class FaceGallery:
 
         q_norm = query_embedding / np.linalg.norm(query_embedding)
 
+        # 1. Pose-Filtered Matching if query_pose is provided
+        target_pose = query_pose if (query_pose in ["Front", "Left", "Right", "Up", "Down"]) else None
+
         best_name = "Unknown"
         best_sim = -1.0
         best_pose = "None"
 
+        # Compare query against enrolled identities
         for name, record in self.gallery.items():
-            for ref in record["references"]:
-                ref_emb = ref["embedding"]
-                sim = float(np.dot(q_norm, ref_emb))
+            refs = record.get("references", [])
+            if not refs:
+                continue
 
-                if sim > best_sim:
-                    best_sim = sim
-                    best_name = name
-                    best_pose = ref["pose"]
+            person_best_sim = -1.0
+            person_best_pose = "None"
+
+            # 1. Check matching pose references if available
+            if target_pose:
+                for ref in refs:
+                    if ref.get("pose") == target_pose:
+                        sim = float(np.dot(q_norm, ref["embedding"]))
+                        if sim > person_best_sim:
+                            person_best_sim = sim
+                            person_best_pose = target_pose
+
+            # 2. Check canonical Front and general references (anchor representation)
+            # Aligned face crops preserve canonical features even when head has minor roll/tilt
+            for ref in refs:
+                sim = float(np.dot(q_norm, ref["embedding"]))
+                if sim > person_best_sim:
+                    person_best_sim = sim
+                    person_best_pose = ref.get("pose", "Front")
+
+            if person_best_sim > best_sim:
+                best_sim = person_best_sim
+                best_name = name
+                best_pose = person_best_pose
 
         conf_percent = calibrate_confidence_score(best_sim)
 
@@ -278,6 +309,83 @@ class FaceGallery:
         logger.info(f"Directory enrollment complete: {enrolled_identities} identities enrolled")
         return enrolled_identities
 
+    def enroll_from_videos_directory(self, videos_dir, detector, embedder, pose_estimator, quality_assessor, preprocessor=None, skip_existing=True, progress_callback=None):
+        """
+        Incrementally enroll identities from video files in data/raw_videos.
+        If skip_existing=True, skips videos whose identity is already enrolled,
+        unless the video file was modified after enrollment.
+        """
+        from pipeline.enrollment import VideoEnrollmentManager
+        from pipeline.preprocessor import FacePreprocessor
+
+        if not os.path.isdir(videos_dir):
+            logger.warning(f"Gallery videos directory not found: {videos_dir}")
+            return 0
+
+        if preprocessor is None:
+            preprocessor = FacePreprocessor()
+
+        manager = VideoEnrollmentManager(
+            target_samples_per_pose=self.max_refs_per_pose,
+            frame_sample_step=config.FRAME_SAMPLE_INTERVAL
+        )
+
+        enrolled = 0
+        video_exts = {'.mp4', '.avi', '.mov', '.webm', '.mkv'}
+        all_files = [f for f in sorted(os.listdir(videos_dir)) if os.path.splitext(f)[1].lower() in video_exts]
+        total_files = len(all_files)
+
+        for idx, filename in enumerate(all_files):
+            name = os.path.splitext(filename)[0]
+            video_path = os.path.join(videos_dir, filename)
+            video_mtime = os.path.getmtime(video_path)
+
+            if skip_existing and name in self.gallery:
+                rec = self.gallery[name]
+                refs = rec.get("references", [])
+                recorded_mtime = rec.get("video_mtime", rec.get("created_at", 0.0))
+                if len(refs) > 0 and recorded_mtime >= video_mtime:
+                    logger.debug(f"Identity '{name}' already enrolled and up to date, skipping.")
+                    if progress_callback:
+                        progress_callback(idx + 1, total_files, filename, name, "skipped", f"Already enrolled ({len(refs)} refs)")
+                    continue
+                # If modified or incomplete, remove old references to re-enroll
+                self.remove_identity(name)
+
+            if progress_callback:
+                progress_callback(idx + 1, total_files, filename, name, "processing", f"Processing {filename}...")
+
+            logger.info(f"Enrolling new/updated video: '{filename}' for '{name}'...")
+            try:
+                report = manager.enroll_from_video(
+                    video_path=video_path,
+                    identity_name=name,
+                    gallery=self,
+                    detector=detector,
+                    embedder=embedder,
+                    pose_estimator=pose_estimator,
+                    quality_assessor=quality_assessor,
+                    preprocessor=preprocessor,
+                )
+                if report.get("success"):
+                    enrolled += 1
+                    if name in self.gallery:
+                        self.gallery[name]["video_mtime"] = video_mtime
+                    logger.info(f"✓ Enrolled '{name}': {report.get('total_enrolled_references')} references across poses: {report.get('enrolled_per_pose')}")
+                    if progress_callback:
+                        progress_callback(idx + 1, total_files, filename, name, "completed", f"Enrolled {report.get('total_enrolled_references')} refs")
+                else:
+                    if progress_callback:
+                        progress_callback(idx + 1, total_files, filename, name, "warning", f"Incomplete: {report.get('status')}")
+            except Exception as e:
+                logger.error(f"Error enrolling video {filename}: {e}")
+                if progress_callback:
+                    progress_callback(idx + 1, total_files, filename, name, "error", str(e))
+
+        if enrolled > 0:
+            logger.info(f"Video enrollment: {enrolled} new/updated identities processed")
+        return enrolled
+
     def get_enrolled_names(self):
         """Return list of enrolled names."""
         return list(self.gallery.keys())
@@ -296,6 +404,8 @@ class FaceGallery:
                 "poses": pose_counts
             }
         return summary
+
+    get_summary = get_gallery_summary
 
     def get_gallery_size(self):
         """Total number of reference vectors across all identities."""

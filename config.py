@@ -8,22 +8,68 @@ import os
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Models directory
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+
 # Detector path
-BLAZEFACE_MODEL_PATH = os.path.join(BASE_DIR, "Model", "Face-Detection", "blaze_face_full_range_sparse.tflite")
+BLAZEFACE_MODEL_PATH = os.path.join(MODELS_DIR, "detection", "blaze_face_full_range_sparse.tflite")
+
+# Head Pose Angle model (ResNet-50 6D rotation matrix)
+HEAD_POSE_MODEL_PATH = os.path.join(MODELS_DIR, "pose", "resnet50.onnx")
 
 # Recognition candidate models
-GLINTR100_MODEL_PATH = os.path.join(BASE_DIR, "Model", "antelopev2", "glintr100.onnx")
-ADAFACE_MODEL_PATH = os.path.join(BASE_DIR, "Model", "RES_net-100", "adaface_ir101.onnx")
-ADAFACE_CKPT_PATH = os.path.join(BASE_DIR, "Model", "RES_net-100", "adaface_ir101_webface12m.ckpt")
+GLINTR100_MODEL_PATH = os.path.join(MODELS_DIR, "embeddings", "glintr100.onnx")
+ADAFACE_MODEL_PATH = os.path.join(MODELS_DIR, "embeddings", "adaface_ir101.onnx")
+ADAFACE_CKPT_PATH = os.path.join(MODELS_DIR, "embeddings", "adaface_ir101_webface12m.ckpt")
 
 # Active recognition model ("glintr100" or "adaface")
 ACTIVE_MODEL = "glintr100"
 EMBEDDING_MODEL_PATH = GLINTR100_MODEL_PATH if ACTIVE_MODEL == "glintr100" else ADAFACE_MODEL_PATH
 
-# Gallery paths
-GALLERY_IMAGES_DIR = os.path.join(BASE_DIR, "Ppl", "Images")
+# ─── Extensible Model Registry ───────────────────────────────────────────────
+# Easily add or compare additional models by registering them here
+AVAILABLE_MODELS = {
+    "glintr100": {
+        "id": "glintr100",
+        "name": "GlintR100 (ResNet100)",
+        "path": GLINTR100_MODEL_PATH,
+        "type": "glintr100",
+        "description": "ArcFace ResNet100 trained on Glint360K",
+    },
+    "adaface": {
+        "id": "adaface",
+        "name": "AdaFace IR-101 (WebFace12M)",
+        "path": ADAFACE_MODEL_PATH,
+        "type": "adaface",
+        "description": "Adaptive Margin Loss IR-101 on WebFace12M",
+    },
+}
+
+
+def get_model_config(model_id):
+    """Retrieve model configuration dictionary by ID."""
+    m_id = model_id.lower()
+    if m_id in AVAILABLE_MODELS:
+        return AVAILABLE_MODELS[m_id]
+    raise ValueError(f"Model '{m_id}' not found in AVAILABLE_MODELS: {list(AVAILABLE_MODELS.keys())}")
+
+
+def get_gallery_cache_path(model_id):
+    """Path to the cached embeddings file for a specific model."""
+    specific = os.path.join(BASE_DIR, "gallery", f"embeddings_{model_id.lower()}.json")
+    if os.path.exists(specific):
+        return specific
+    return GALLERY_EMBEDDINGS_PATH
+
+
+# Data & Gallery paths
+DATA_DIR = os.path.join(BASE_DIR, "data")
+GALLERY_VIDEOS_DIR = os.path.join(DATA_DIR, "raw_videos")
+GALLERY_IMAGES_DIR = os.path.join(DATA_DIR, "images")
 GALLERY_EMBEDDINGS_PATH = os.path.join(BASE_DIR, "gallery", "embeddings.json")
-TEST_IMAGES_DIR = os.path.join(BASE_DIR, "Ppl", "Test")
+TESTS_DIR = os.path.join(BASE_DIR, "tests")
+TEST_IMAGES_DIR = os.path.join(TESTS_DIR, "test_data")
+BENCHMARK_RESULTS_PATH = os.path.join(TESTS_DIR, "benchmark_results.json")
 
 # ─── BlazeFace Detection Settings ────────────────────────────────────────────
 BLAZEFACE_INPUT_SIZE = 192                # Model expects 192x192 input
@@ -76,7 +122,7 @@ TRACKER_RECOGNITION_INTERVAL = 10         # Re-run recognition every N frames
 
 # ─── Performance Settings ────────────────────────────────────────────────────
 ONNX_NUM_THREADS = 4                      # ONNX Runtime intra-op threads
-ONNX_EXECUTION_PROVIDERS = ["CPUExecutionProvider"]
+ONNX_EXECUTION_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 # ─── Flask / Web Settings ────────────────────────────────────────────────────
 FLASK_HOST = "0.0.0.0"

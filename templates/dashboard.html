@@ -34,12 +34,20 @@
             <div class="model-selector-wrapper">
                 <label for="model-select" class="selector-label">Model:</label>
                 <select id="model-select" class="select-dropdown" onchange="switchModel(this.value)">
-                    <option value="glintr100" {% if gallery_info.active_model == 'glintr100' %}selected{% endif %}>GlintR100 (ResNet100)</option>
-                    <option value="adaface" {% if gallery_info.active_model == 'adaface' %}selected{% endif %}>AdaFace IR-101 (WebFace12M)</option>
+                    {% for m_id, m_cfg in available_models.items() %}
+                    <option value="{{ m_id }}" {% if gallery_info.active_model == m_id %}selected{% endif %}>{{ m_cfg.name }}</option>
+                    {% endfor %}
                 </select>
             </div>
+            <!-- Train Model Button -->
+            <button class="btn btn-train" id="btn-header-train" onclick="openTrainModal()" title="Train Model on Videos in data/raw_videos">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                </svg>
+                <span>Train</span>
+            </button>
             <div class="status-pill" id="engine-status">
-                <span class="status-dot active"></span>
+                <span class="status-dot active" id="status-dot"></span>
                 <span class="status-text" id="status-model-name">{{ gallery_info.active_model|upper }} Active</span>
             </div>
         </div>
@@ -69,20 +77,95 @@
 
         <!-- ─── Info Cards ─────────────────────────────────────────── -->
         <section class="info-cards" id="info-cards">
-            <div class="info-card" id="card-cameras">
-                <div class="info-card-icon">
-                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            <!-- Faces in Frame Card -->
+            <div class="info-card info-card-highlight" id="card-faces-in-frame">
+                <div class="info-card-icon icon-faces">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+                        <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+                        <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+                        <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+                        <circle cx="12" cy="11" r="3.5"/>
+                        <path d="M7.5 18a4.5 4.5 0 0 1 9 0"/>
                     </svg>
                 </div>
                 <div class="info-card-data">
-                    <span class="info-card-value" id="active-cameras">{{ camera_ids|length }}</span>
-                    <span class="info-card-label">Configured Cameras</span>
+                    <div class="val-row">
+                        <span class="info-card-value text-accent" id="faces-in-frame-val">0</span>
+                        <span class="badge badge-live" id="faces-in-frame-badge"><span class="pulse-dot"></span> LIVE</span>
+                    </div>
+                    <span class="info-card-label">Faces in Frame</span>
                 </div>
             </div>
+
+            <!-- Pipeline Latency Card -->
+            <div class="info-card" id="card-latency">
+                <div class="info-card-icon icon-latency">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                </div>
+                <div class="info-card-data">
+                    <div class="val-row">
+                        <span class="info-card-value" id="avg-latency">--</span>
+                        <span class="val-unit">ms</span>
+                    </div>
+                    <span class="info-card-label" id="latency-breakdown">Pipeline Latency (GPU)</span>
+                </div>
+            </div>
+
+            <!-- RAM Usage Card -->
+            <div class="info-card" id="card-ram">
+                <div class="info-card-icon icon-ram">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <rect x="3" y="4" width="18" height="16" rx="2"/>
+                        <line x1="7" y1="2" x2="7" y2="4"/>
+                        <line x1="17" y1="2" x2="17" y2="4"/>
+                        <line x1="7" y1="20" x2="7" y2="22"/>
+                        <line x1="17" y1="20" x2="17" y2="22"/>
+                        <line x1="3" y1="10" x2="21" y2="10"/>
+                        <line x1="3" y1="14" x2="21" y2="14"/>
+                    </svg>
+                </div>
+                <div class="info-card-data">
+                    <div class="val-row">
+                        <span class="info-card-value" id="ram-percent">--%</span>
+                        <span class="badge badge-ram" id="ram-details">-- GB</span>
+                    </div>
+                    <span class="info-card-label">System RAM Usage</span>
+                </div>
+            </div>
+
+            <!-- GPU Compute Card -->
+            <div class="info-card" id="card-gpu">
+                <div class="info-card-icon icon-gpu">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <rect x="4" y="4" width="16" height="16" rx="2"/>
+                        <rect x="9" y="9" width="6" height="6"/>
+                        <line x1="9" y1="1" x2="9" y2="4"/>
+                        <line x1="15" y1="1" x2="15" y2="4"/>
+                        <line x1="9" y1="20" x2="9" y2="23"/>
+                        <line x1="15" y1="20" x2="15" y2="23"/>
+                        <line x1="20" y1="9" x2="23" y2="9"/>
+                        <line x1="20" y1="14" x2="23" y2="14"/>
+                        <line x1="1" y1="9" x2="4" y2="9"/>
+                        <line x1="1" y1="14" x2="4" y2="14"/>
+                    </svg>
+                </div>
+                <div class="info-card-data">
+                    <div class="val-row">
+                        <span class="info-card-value" id="gpu-util">--%</span>
+                        <span class="badge badge-gpu" id="gpu-badge">-- MB VRAM</span>
+                    </div>
+                    <span class="info-card-label" id="gpu-label">GPU Compute (RTX 3050)</span>
+                </div>
+            </div>
+
+            <!-- Identities Enrolled Card -->
             <div class="info-card" id="card-identities">
-                <div class="info-card-icon">
-                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5">
+                <div class="info-card-icon icon-identities">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
                         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
                         <circle cx="9" cy="7" r="4"/>
                         <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
@@ -90,30 +173,11 @@
                     </svg>
                 </div>
                 <div class="info-card-data">
-                    <span class="info-card-value" id="enrolled-count">{{ gallery_info.enrolled_names|length }}</span>
-                    <span class="info-card-label">Identities ({{ gallery_info.total_embeddings }} refs)</span>
-                </div>
-            </div>
-            <div class="info-card" id="card-latency">
-                <div class="info-card-icon">
-                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                    </svg>
-                </div>
-                <div class="info-card-data">
-                    <span class="info-card-value" id="avg-latency">--</span>
-                    <span class="info-card-label">Avg Pipeline (ms)</span>
-                </div>
-            </div>
-            <div class="info-card" id="card-fps">
-                <div class="info-card-icon">
-                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-                    </svg>
-                </div>
-                <div class="info-card-data">
-                    <span class="info-card-value" id="frames-processed">0</span>
-                    <span class="info-card-label">Processed (1-in-5)</span>
+                    <div class="val-row">
+                        <span class="info-card-value" id="enrolled-count">{{ gallery_info.enrolled_names|length }}</span>
+                        <span class="badge badge-info">{{ gallery_info.total_embeddings }} refs</span>
+                    </div>
+                    <span class="info-card-label">Enrolled Identities</span>
                 </div>
             </div>
         </section>
@@ -144,6 +208,18 @@
                          alt="Camera {{ cam_id }} Feed"
                          onerror="handleFeedError(this, {{ cam_id }})"
                          onload="handleFeedLoad(this, {{ cam_id }})">
+
+                    <!-- Live HUD Watermark / Overlay -->
+                    <div class="camera-hud-badge" id="hud-{{ cam_id }}">
+                        <span class="hud-item hud-live-tag"><span class="hud-dot"></span> LIVE</span>
+                        <span class="hud-separator">•</span>
+                        <span class="hud-item"><strong id="hud-faces-{{ cam_id }}">0</strong> face(s)</span>
+                        <span class="hud-separator">•</span>
+                        <span class="hud-item"><strong id="hud-latency-{{ cam_id }}">--</strong> ms</span>
+                        <span class="hud-separator">•</span>
+                        <span class="hud-item"><strong id="hud-gpu-{{ cam_id }}">--</strong>% GPU (<span id="hud-vram-{{ cam_id }}">--</span> MB)</span>
+                    </div>
+
                     <div class="camera-overlay disconnected" id="overlay-{{ cam_id }}">
                         <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5">
                             <path d="M16.5 9.4l-9-5.19M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
@@ -159,16 +235,20 @@
                         <span class="stat-value" id="status-{{ cam_id }}">Connecting...</span>
                     </div>
                     <div class="camera-stat">
+                        <span class="stat-label">In Frame</span>
+                        <span class="stat-value stat-faces" id="faces-in-frame-cam-{{ cam_id }}">0 faces</span>
+                    </div>
+                    <div class="camera-stat">
+                        <span class="stat-label">Pipeline Latency</span>
+                        <span class="stat-value stat-latency" id="total-time-{{ cam_id }}">-- ms</span>
+                    </div>
+                    <div class="camera-stat">
                         <span class="stat-label">Detection</span>
                         <span class="stat-value" id="det-time-{{ cam_id }}">-- ms</span>
                     </div>
                     <div class="camera-stat">
-                        <span class="stat-label">Embedding</span>
+                        <span class="stat-label">Embedding (GPU)</span>
                         <span class="stat-value" id="emb-time-{{ cam_id }}">-- ms</span>
-                    </div>
-                    <div class="camera-stat">
-                        <span class="stat-label">Faces</span>
-                        <span class="stat-value" id="face-count-{{ cam_id }}">0</span>
                     </div>
                 </div>
             </div>
@@ -226,13 +306,21 @@
                     </svg>
                     Enrolled Identities Gallery
                 </h2>
-                <button class="btn btn-secondary" id="btn-re-enroll" onclick="reEnroll()">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="23 4 23 10 17 10"/>
-                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-                    </svg>
-                    Reload From Disk
-                </button>
+                <div class="gallery-header-actions">
+                    <button class="btn btn-primary btn-sm-train" id="btn-gallery-train" onclick="openTrainModal()">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                        </svg>
+                        Train on Raw-Videos
+                    </button>
+                    <button class="btn btn-secondary" id="btn-re-enroll" onclick="reEnroll()">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="23 4 23 10 17 10"/>
+                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                        </svg>
+                        Reload Cache
+                    </button>
+                </div>
             </div>
             <div class="gallery-list" id="gallery-list">
                 {% for name in gallery_info.enrolled_names %}
@@ -253,7 +341,7 @@
                 {% if not gallery_info.enrolled_names %}
                 <div class="gallery-empty">
                     <p>No identities enrolled.</p>
-                    <p class="text-muted">Use video enrollment or add images to <code>Ppl/Images/</code></p>
+                    <p class="text-muted">Click <strong>Train on Raw-Videos</strong> or enroll above.</p>
                 </div>
                 {% endif %}
             </div>
@@ -264,6 +352,88 @@
         </section>
     </main>
 
-    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    <!-- ─── Training Modal ─────────────────────────────────────────── -->
+    <div class="modal-backdrop" id="train-modal" style="display:none;" onclick="handleModalBackdropClick(event)">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <div class="modal-icon-badge">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3>Train Model Embeddings</h3>
+                        <p class="modal-subtitle">Generates pose-aware, canonically aligned embeddings from <code>data/raw_videos/</code></p>
+                    </div>
+                </div>
+                <button class="btn-close-modal" onclick="closeTrainModal()" title="Close">&times;</button>
+            </div>
+
+            <div class="modal-body">
+                <!-- Model Selection & Trigger -->
+                <div class="train-config-group">
+                    <label for="train-model-select">Target Model to Train:</label>
+                    <div class="train-select-row">
+                        <select id="train-model-select" class="select-dropdown">
+                            {% for m_id, m_cfg in available_models.items() %}
+                            <option value="{{ m_id }}" {% if gallery_info.active_model == m_id %}selected{% endif %}>
+                                {{ m_cfg.name }} ({{ m_cfg.description }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <button class="btn btn-primary btn-start-train-action" id="btn-start-training" onclick="startTraining()">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                            </svg>
+                            Start Training
+                        </button>
+                    </div>
+                </div>
+
+                <div class="train-info-box">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="16" x2="12" y2="12"/>
+                        <line x1="12" y1="8" x2="12.01" y2="8"/>
+                    </svg>
+                    <span>Each model stores its embeddings into its own isolated file (e.g. <code>gallery/embeddings_glintr100.json</code>). Canonical face alignment is applied to eliminate tilt misclassifications.</span>
+                </div>
+
+                <!-- Training Progress Section -->
+                <div class="train-progress-section" id="train-progress-section" style="display:none;">
+                    <div class="train-progress-header">
+                        <span class="train-status-label" id="train-status-label">Training in progress...</span>
+                        <span class="train-percent" id="train-percent">0%</span>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar-fill" id="train-progress-bar" style="width: 0%;"></div>
+                    </div>
+                    <div class="train-current-step" id="train-current-step">
+                        <span class="step-spinner"></span>
+                        <span id="train-step-text">Initializing...</span>
+                    </div>
+                </div>
+
+                <!-- Training Live Logs -->
+                <div class="train-log-container" id="train-log-container" style="display:none;">
+                    <div class="train-log-header">
+                        <span>Live Enrollment Logs</span>
+                        <span class="badge badge-sm badge-live" id="train-log-badge">Live</span>
+                    </div>
+                    <div class="train-log-box" id="train-log-box"></div>
+                </div>
+
+                <!-- Result Alert -->
+                <div id="train-result-alert" class="train-result-alert" style="display:none;"></div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeTrainModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=2"></script>
 </body>
 </html>
