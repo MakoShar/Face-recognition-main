@@ -35,8 +35,11 @@ class TrackedFace:
         self.observations = []  # list of recent frame observation dicts
 
         # State confirmation tracking (Section 5)
-        self.raw_name = name
-        self.confirmed_name = "Unknown"
+        # Formatted unknown visitor label (e.g. Unknown-001, Unknown-002)
+        prefix = getattr(config, 'UNKNOWN_LABEL_PREFIX', 'Unknown-')
+        self.unknown_label = f"{prefix}{self.track_id + 1:03d}"
+        if self.name == "Unknown":
+            self.name = self.unknown_label
         self.is_confirmed = False
         self.candidate_name = None
         self.consistent_observations = 0
@@ -78,7 +81,7 @@ class TrackedFace:
             else:
                 self.direction = "Stationary"
 
-    def add_observation(self, name, similarity, confidence, pose="None", quality=100.0):
+    def add_observation(self, name, similarity, confidence, pose="None", quality=100.0, crop=None, frame=None, bbox=None):
         """
         Record a frame observation, validate stability, detect contradictions,
         and combine observations across the temporal window.
@@ -122,7 +125,14 @@ class TrackedFace:
         # Retain best-quality observation across the individual's track lifecycle
         if composite_quality > self.best_quality_score:
             self.best_quality_score = composite_quality
+            prev_frame = self.best_observation.get('frame') if self.best_observation else None
+            prev_crop = self.best_observation.get('crop') if self.best_observation else None
+            prev_bbox = self.best_observation.get('bbox') if self.best_observation else None
+
             self.best_observation = dict(obs)
+            self.best_observation['frame'] = frame.copy() if frame is not None else prev_frame
+            self.best_observation['crop'] = crop.copy() if crop is not None else prev_crop
+            self.best_observation['bbox'] = bbox if bbox is not None else (prev_bbox if prev_bbox is not None else self.bbox)
 
         # ─── Confirmation & Contradiction Logic (Section 5) ───
         if name != "Unknown" and confidence >= getattr(config, 'CONFIDENCE_THRESHOLD_YELLOW', 60.0):
@@ -175,7 +185,7 @@ class TrackedFace:
         elif self.candidate_name is not None and self.consistent_observations >= 1:
             self.name = self.candidate_name
         else:
-            self.name = "Unknown"
+            self.name = self.unknown_label
 
         return self.name, self.confidence, self.similarity, self.pose
 
@@ -380,7 +390,7 @@ class FaceTracker:
 
         return assignments
 
-    def update_identity(self, track_id, name, similarity, confidence=0.0, pose="None", quality=100.0):
+    def update_identity(self, track_id, name, similarity, confidence=0.0, pose="None", quality=100.0, crop=None, frame=None, bbox=None):
         """
         Record a new observation and combine observations across frames for this track.
 
@@ -388,7 +398,10 @@ class FaceTracker:
             (combined_name, combined_conf, combined_sim, combined_pose)
         """
         if track_id in self.tracks:
-            return self.tracks[track_id].add_observation(name, similarity, confidence, pose, quality=quality)
+            return self.tracks[track_id].add_observation(
+                name, similarity, confidence, pose, quality=quality,
+                crop=crop, frame=frame, bbox=bbox
+            )
         return name, confidence, similarity, pose
 
     def get_track(self, track_id):

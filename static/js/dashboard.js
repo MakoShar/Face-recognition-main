@@ -689,7 +689,7 @@ async function pollAttendance() {
         if (events.length === 0) {
             tbody.innerHTML = `
                 <tr class="attendance-empty-row">
-                    <td colspan="8">
+                    <td colspan="9">
                         <div class="empty-state-content">
                             <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5">
                                 <circle cx="12" cy="12" r="10"/>
@@ -706,27 +706,66 @@ async function pollAttendance() {
 
         // Format and render recent events
         tbody.innerHTML = events.map(ev => {
-            const timeStr = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : '--:--:--';
-            const confClass = ev.confidence >= 90 ? 'badge-conf-high' : 'badge-conf-med';
+            const timeStr = ev.timestamp ? new Date(ev.timestamp * 1000).toLocaleTimeString() : (ev.time_str || '--:--:--');
+            const isUnknown = (ev.name && ev.name.startsWith('Unknown')) || ev.status === 'UNREGISTERED_VISITOR';
+            const confClass = isUnknown ? 'badge-conf-unknown' : (ev.confidence >= 90 ? 'badge-conf-high' : 'badge-conf-med');
+            const confText = isUnknown ? 'Visitor' : `${(ev.confidence || 0).toFixed(1)}%`;
             const qualityStr = ev.quality_score ? ev.quality_score.toFixed(1) : '--';
             const poseStr = ev.pose || 'Front';
+            const dirStr = ev.direction ? ` &bull; ${escapeHtml(ev.direction)}` : '';
+            const statusBadge = isUnknown 
+                ? '<span class="badge-visitor">Visitor Logged</span>' 
+                : '<span class="badge-logged">Confirmed</span>';
+
+            const screenshotThumb = ev.screenshot_url
+                ? `<div class="table-thumb-wrap" onclick="viewScreenshot('${escapeHtml(ev.screenshot_url)}', '${escapeHtml(ev.name)}', '${escapeHtml(timeStr)}')">
+                     <img src="${escapeHtml(ev.screenshot_url)}" class="table-thumb" alt="Log" loading="lazy">
+                   </div>`
+                : `<span class="table-thumb-placeholder" title="No screenshot">
+                     <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                       <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                     </svg>
+                   </span>`;
 
             return `
                 <tr>
                     <td style="font-family: monospace; color: var(--text-secondary);">${timeStr}</td>
-                    <td><strong>${escapeHtml(ev.name)}</strong></td>
+                    <td>${screenshotThumb}</td>
+                    <td><strong>${escapeHtml(ev.name)}</strong>${isUnknown ? ' <span style="font-size:0.75rem; color:#f59e0b;">(Visitor)</span>' : ''}</td>
                     <td><span class="badge-track">#${ev.track_id}</span></td>
-                    <td><span class="${confClass}">${(ev.confidence || 0).toFixed(1)}%</span></td>
+                    <td><span class="${confClass}">${confText}</span></td>
                     <td style="color: var(--text-secondary);">${qualityStr}</td>
                     <td><span class="mini-pose-badge">${escapeHtml(poseStr)}</span></td>
-                    <td><span style="color: var(--text-muted);">Cam ${ev.camera_id}</span></td>
-                    <td><span class="badge-logged">Logged</span></td>
+                    <td><span style="color: var(--text-muted);">Cam ${ev.camera_id}${dirStr}</span></td>
+                    <td>${statusBadge}</td>
                 </tr>
             `;
         }).join('');
 
     } catch (e) {
         console.debug('Attendance poll failed:', e);
+    }
+}
+
+function viewScreenshot(url, name, timeStr) {
+    const modal = document.getElementById('screenshot-modal');
+    const modalImg = document.getElementById('screenshot-modal-img');
+    const modalTitle = document.getElementById('screenshot-modal-title');
+    const modalSubtitle = document.getElementById('screenshot-modal-subtitle');
+    const downloadBtn = document.getElementById('screenshot-download-btn');
+    if (modal && modalImg) {
+        modalImg.src = url;
+        if (modalTitle) modalTitle.textContent = `${name}`;
+        if (modalSubtitle) modalSubtitle.textContent = `Logged at ${timeStr} • Stored in Log/`;
+        if (downloadBtn) downloadBtn.href = url;
+        modal.style.display = 'flex';
+    }
+}
+
+function closeScreenshotModal(e) {
+    if (!e || e.target.id === 'screenshot-modal' || (e.target.classList && e.target.classList.contains('btn-close-modal'))) {
+        const modal = document.getElementById('screenshot-modal');
+        if (modal) modal.style.display = 'none';
     }
 }
 

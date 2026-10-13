@@ -12,7 +12,7 @@ import time
 import logging
 import threading
 from flask import (
-    Flask, render_template, Response, jsonify, request, abort
+    Flask, render_template, Response, jsonify, request, abort, send_from_directory
 )
 
 import config
@@ -264,6 +264,12 @@ def api_attendance_clear():
         'status': 'success' if success else 'error',
         'message': 'Attendance log cleared' if success else 'Failed to clear attendance log'
     })
+
+
+@app.route('/Log/<path:filename>')
+def serve_log_screenshot(filename):
+    """Serve attendance screenshot image from the Log folder."""
+    return send_from_directory(config.LOGS_DIR, filename)
 
 
 @app.route('/api/enroll/video', methods=['POST'])

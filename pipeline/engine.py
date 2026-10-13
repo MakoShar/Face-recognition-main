@@ -278,26 +278,38 @@ class CameraWorker:
                         # ── 6. Combine Observations Across Frames ──
                         if self.tracker is not None:
                             name, confidence, similarity, match_pose = self.tracker.update_identity(
-                                track_id, raw_name, raw_sim, raw_conf, match_pose, quality=blur_score
+                                track_id, raw_name, raw_sim, raw_conf, match_pose, quality=blur_score,
+                                crop=crop, frame=frame, bbox=bboxes[det_idx]
                             )
                             # Evaluate attendance event (isolated per camera & duplicate suppressed)
-                            if self.attendance_manager is not None and name != "Unknown":
+                            if self.attendance_manager is not None:
                                 track = self.tracker.get_track(track_id)
                                 best_obs = track.best_observation if track else None
-                                is_confirmed = getattr(track, 'is_confirmed', True) if track else True
+                                is_confirmed = getattr(track, 'is_confirmed', False) if track else False
                                 direction = getattr(track, 'direction', "Entry") if track else "Entry"
-                                self.attendance_manager.process_observation(
-                                    track_id=track_id,
-                                    name=name,
-                                    confidence=confidence,
-                                    similarity=similarity,
-                                    pose=match_pose,
-                                    quality_score=blur_score,
-                                    camera_id=self.camera_id,
-                                    best_observation=best_obs,
-                                    is_confirmed=is_confirmed,
-                                    direction=direction
+
+                                # GUARD: If the track is currently accumulating observations for an enrolled candidate
+                                # (e.g. candidate_name is 'Anoop Verma'), do NOT dispatch an unconfirmed visitor event!
+                                is_candidate_pending = (
+                                    not is_confirmed and track and
+                                    track.candidate_name is not None and
+                                    track.candidate_name != "Unknown"
                                 )
+                                if not is_candidate_pending:
+                                    self.attendance_manager.process_observation(
+                                        track_id=track_id,
+                                        name=name,
+                                        confidence=confidence,
+                                        similarity=similarity,
+                                        pose=match_pose,
+                                        quality_score=blur_score,
+                                        camera_id=self.camera_id,
+                                        best_observation=best_obs,
+                                        is_confirmed=is_confirmed,
+                                        direction=direction,
+                                        frame=frame,
+                                        bbox=bboxes[det_idx]
+                                    )
                         else:
                             name, confidence, similarity = raw_name, raw_conf, raw_sim
 
@@ -378,9 +390,12 @@ class CameraWorker:
                 color = config.COLOR_YELLOW
                 label = f"{track_prefix}{result.name} ({conf:.0f}%){att_suffix}"
             else:
-                # Below 60%: NO IDENTITY LABEL
+                # Below 60%: Unknown Visitor label (e.g. Unknown-001)
                 color = config.COLOR_UNKNOWN
-                label = f"{track_prefix}Unknown"
+                unk_name = result.name if (result.name and result.name.startswith("Unknown-")) else (
+                    f"Unknown-{result.track_id + 1:03d}" if getattr(result, 'track_id', -1) >= 0 else "Unknown"
+                )
+                label = f"{track_prefix}{unk_name}{att_suffix}"
 
             # Draw bounding box
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, config.BBOX_THICKNESS)

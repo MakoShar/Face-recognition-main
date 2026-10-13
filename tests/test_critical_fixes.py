@@ -334,9 +334,64 @@ def test_10_duplicate_attendance_prevention():
     print(f"  ✓ Passed: In-track duplicate suppressed, cooldown enforced, direction Exit tracked")
 
 
+def test_11_unknown_visitor_logging():
+    """11. Unknown visitors are correctly labeled Unknown-001... and logged to attendance."""
+    print("Running Test 11: Unknown visitor Unknown-001 logging and employee upgrade...")
+    att_mgr = AttendanceManager(min_confidence=80.0, min_stable_frames=3, cooldown_seconds=60)
+    req_frames = getattr(config, 'UNKNOWN_MIN_STABLE_FRAMES', 8)
+
+    # Accumulate frames up to req_frames - 1
+    for _ in range(req_frames - 1):
+        ev = att_mgr.process_observation(track_id=0, name="Unknown-001", confidence=0.0, camera_id=0, is_confirmed=False)
+        assert ev is None, "Under-threshold observations should not trigger immediate visitor event"
+
+    # Frame req_frames: reaches stability threshold
+    ev_logged = att_mgr.process_observation(track_id=0, name="Unknown-001", confidence=0.0, camera_id=0, is_confirmed=False)
+    assert ev_logged is not None, f"Frame {req_frames} should log Unknown-001 visitor attendance"
+    assert ev_logged["name"] == "Unknown-001"
+    assert ev_logged["status"] == "UNREGISTERED_VISITOR"
+
+    # Subsequent employee confirmation upgrades the event
+    ev_upgraded = att_mgr.process_observation(track_id=0, name="Alice", confidence=92.0, similarity=0.85, camera_id=0, is_confirmed=True)
+    assert ev_upgraded is not None, "Confirmed employee observation should upgrade visitor event"
+    assert ev_upgraded["name"] == "Alice"
+    assert ev_upgraded["status"] == "CONFIRMED"
+    print(f"  ✓ Passed: Correctly logged '{ev_logged['name']}' (Visitor) and upgraded to '{ev_upgraded['name']}' (Confirmed)")
+
+
+def test_12_attendance_screenshot_logging():
+    """12. Screenshot capture and persistence to Log/ folder upon attendance logging and upgrade."""
+    print("Running Test 12: Attendance screenshot storage in Log/ folder...")
+    test_logs_dir = os.path.join(config.BASE_DIR, "Log")
+    os.makedirs(test_logs_dir, exist_ok=True)
+    att_mgr = AttendanceManager(min_confidence=85.0, min_stable_frames=2, logs_dir=test_logs_dir)
+
+    dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    dummy_frame[:] = (40, 40, 50)
+    dummy_bbox = [100, 100, 250, 250]
+
+    # Frame 1: under stability threshold
+    att_mgr.process_observation(track_id=42, name="Anoop Verma", confidence=91.0, similarity=0.82, frame=dummy_frame, bbox=dummy_bbox)
+    # Frame 2: triggers attendance event
+    ev = att_mgr.process_observation(track_id=42, name="Anoop Verma", confidence=91.0, similarity=0.82, frame=dummy_frame, bbox=dummy_bbox)
+
+    assert ev is not None, "Expected attendance event to be logged"
+    assert "screenshot" in ev and ev["screenshot"] is not None, "Event must include 'screenshot' filename"
+    assert "screenshot_url" in ev and ev["screenshot_url"].startswith("/Log/"), "Event must include '/Log/' URL"
+
+    saved_path = os.path.join(test_logs_dir, ev["screenshot"])
+    assert os.path.exists(saved_path), f"Screenshot file '{saved_path}' must exist on disk"
+    assert os.path.getsize(saved_path) > 1000, "Screenshot file size must be non-trivial"
+
+    read_img = cv2.imread(saved_path)
+    assert read_img is not None and read_img.shape == (480, 640, 3), "Saved screenshot must be readable as an image"
+
+    print(f"  ✓ Passed: Screenshot '{ev['screenshot']}' successfully stored in Log folder ({os.path.getsize(saved_path)} bytes)")
+
+
 def run_all_tests():
     print("=" * 70)
-    print("  RUNNING ALL 10 AUTOMATED CRITICAL BUG FIX TESTS")
+    print("  RUNNING ALL AUTOMATED CRITICAL BUG FIX & VISITOR TESTS")
     print("=" * 70)
     t0 = time.time()
 
@@ -350,10 +405,12 @@ def run_all_tests():
     test_8_multi_camera_track_isolation()
     test_9_concurrent_detector_inference()
     test_10_duplicate_attendance_prevention()
+    test_11_unknown_visitor_logging()
+    test_12_attendance_screenshot_logging()
 
     duration = time.time() - t0
     print("=" * 70)
-    print(f"  ALL 10 TESTS PASSED SUCCESSFULLY in {duration:.2f}s!")
+    print(f"  ALL 12 TESTS PASSED SUCCESSFULLY in {duration:.2f}s!")
     print("=" * 70)
 
 

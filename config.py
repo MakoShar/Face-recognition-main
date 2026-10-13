@@ -67,6 +67,8 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 GALLERY_VIDEOS_DIR = os.path.join(DATA_DIR, "raw_videos")
 GALLERY_IMAGES_DIR = os.path.join(DATA_DIR, "images")
 GALLERY_EMBEDDINGS_PATH = os.path.join(BASE_DIR, "gallery", "embeddings.json")
+LOGS_DIR = os.path.join(BASE_DIR, "Log")
+os.makedirs(LOGS_DIR, exist_ok=True)
 TESTS_DIR = os.path.join(BASE_DIR, "tests")
 TEST_IMAGES_DIR = os.path.join(TESTS_DIR, "test_data")
 BENCHMARK_RESULTS_PATH = os.path.join(TESTS_DIR, "benchmark_results.json")
@@ -134,6 +136,9 @@ ATTENDANCE_CONFIDENCE_THRESHOLD = 85.0     # Minimum confidence % to record atte
 ATTENDANCE_MIN_FRAMES = 3                  # Minimum stable observations in track before logging
 ATTENDANCE_COOLDOWN_SECONDS = 300          # 5 minutes suppression window for duplicate check-ins
 ATTENDANCE_LOG_PATH = os.path.join(DATA_DIR, "attendance.json")
+LOG_UNKNOWN_ATTENDANCE = True              # Enable logging of unregistered visitors as Unknown-001, etc.
+UNKNOWN_LABEL_PREFIX = "Unknown-"          # Format: Unknown-001, Unknown-002...
+UNKNOWN_MIN_STABLE_FRAMES = 8              # Require 8 stable frames before declaring an unknown visitor
 
 # ─── Performance Settings ────────────────────────────────────────────────────
 ONNX_NUM_THREADS = 4                      # ONNX Runtime intra-op threads
